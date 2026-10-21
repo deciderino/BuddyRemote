@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.log
+pair_debug.log
+buddyremote.log
