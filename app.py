@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QCheckBox, QSpinBox, QMessageBox, QSystemTrayIcon, QMenu,
     QTextEdit, QComboBox
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings
 from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen
 
 # ---------------------------------------------------------------------------
@@ -51,6 +51,7 @@ CLI_SCRIPT = CLI_DIR / "cli.py"  # fallback
 LANG_DIR = RES_DIR / "lang"
 LOCK_FILE = APP_DIR / ".lock"
 LOG_FILE = APP_DIR / "buddyremote.log"
+WINDOW_STATE_FILE = APP_DIR / "window.ini"  # UI only: size/maximized/position
 
 # ---------------------------------------------------------------------------
 def prepare_packaged_dir():
@@ -90,6 +91,49 @@ def t(key, **kw):
         return s
 
 
+def touch_css(light: bool) -> str:
+    """UI only: larger touch/TV-friendly controls and a clearly visible focus ring.
+    Appended after each theme stylesheet so it overrides sizes, not colors."""
+    acc = "#1565c0" if light else "#4fc3f7"
+    focus_bg = "#d6e6fa" if light else "#1d3b4f"
+    return f"""
+        QWidget {{ font-size: 15px; }}
+        QPushButton {{ min-height: 32px; min-width: 24px; padding: 6px 10px; border-width: 2px; border-radius: 6px; }}
+        QPushButton:focus {{ border: 2px solid {acc}; background: {focus_bg}; }}
+        QPushButton[touchRole="action"] {{ min-width: 72px; }}
+        QMessageBox QPushButton, QDialog QPushButton {{ min-width: 80px; }}
+        QLineEdit, QSpinBox, QComboBox {{ min-height: 36px; padding: 4px 8px; border-width: 2px; border-radius: 4px; }}
+        QDialog QLineEdit {{ min-width: 260px; }}
+        QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: 2px solid {acc}; }}
+        QCheckBox {{ spacing: 12px; min-height: 34px; padding: 2px 6px; border: 2px solid transparent; border-radius: 6px; }}
+        QCheckBox:focus {{ border: 2px solid {acc}; background: {focus_bg}; }}
+        QCheckBox::indicator {{ width: 26px; height: 26px; }}
+    """
+
+
+def fit_dialog_to_screen(dlg: QDialog):
+    """UI only: if a dialog is taller than ~90% of the screen (e.g. Steam Deck at 150%),
+    move its contents into a scroll area so nothing ends up off-screen."""
+    scr = dlg.screen() or QApplication.primaryScreen()
+    if not scr or not dlg.layout():
+        return
+    max_h = int(scr.availableGeometry().height() * 0.9)
+    if dlg.sizeHint().height() <= max_h:
+        return
+    inner = QWidget()
+    inner.setLayout(dlg.layout())  # reparents the existing layout and its widgets
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QFrame.Shape.NoFrame)
+    sa.setWidget(inner)
+    inner.setObjectName("fitInner")
+    sa.setStyleSheet("QScrollArea, QWidget#qt_scrollarea_viewport, QWidget#fitInner { background: transparent; }")
+    outer = QVBoxLayout(dlg)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.addWidget(sa)
+    dlg.resize(inner.sizeHint().width() + sa.verticalScrollBar().sizeHint().width() + 4, max_h)
+
+
 def dialog_stylesheet(parent=None) -> str:
     """Return a stylesheet for dialogs based on the current theme."""
     light = False
@@ -106,7 +150,7 @@ def dialog_stylesheet(parent=None) -> str:
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #888; border-radius: 3px; background: #fff; }
             QCheckBox::indicator:checked { background: #4caf50; border-color: #388e3c; }
             QCheckBox::indicator:checked:hover { background: #66bb6a; }
-        """
+        """ + touch_css(True)
     else:
         return """
             QDialog, QMessageBox { background: #1e1e1e; color: #e0e0e0; }
@@ -118,7 +162,7 @@ def dialog_stylesheet(parent=None) -> str:
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #666; border-radius: 3px; background: #2a2a2a; }
             QCheckBox::indicator:checked { background: #4caf50; border-color: #388e3c; }
             QCheckBox::indicator:checked:hover { background: #66bb6a; }
-        """
+        """ + touch_css(False)
 
 
 # ---------------------------------------------------------------------------
@@ -360,12 +404,16 @@ class HostRow(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+        self.nav_buttons = []  # UI only: arrow-key navigation order
 
         info = QVBoxLayout()
         self.name_lbl = QLabel(host.get("name", "Unnamed"))
         self.ip_lbl = QLabel(host.get("ip", ""))
         self.status_lbl = QLabel(t("unknown"))
+        self.name_lbl.setWordWrap(True)
+        self.ip_lbl.setWordWrap(True)
         self._apply_row_theme()
         info.addWidget(self.name_lbl)
         info.addWidget(self.ip_lbl)
@@ -376,8 +424,10 @@ class HostRow(QFrame):
         for act, label in [("wake", t("wake")), ("shutdown", t("shutdown")),
                            ("restart", t("restart")), ("suspend", t("suspend"))]:
             btn = QPushButton(label)
-            btn.setFixedWidth(80)
+            btn.setProperty("touchRole", "action")  # min width via touch_css
             btn.clicked.connect(lambda _, a=act: self.app.do_action(self.host, a))
+            btn.installEventFilter(self.app)
+            self.nav_buttons.append(btn)
             layout.addWidget(btn)
 
         # Controls
@@ -386,20 +436,24 @@ class HostRow(QFrame):
                            ("✎", lambda: self.app.edit_host(self.host)),
                            ("✕", lambda: self.app.remove_host(self.host))]:
             b = QPushButton(text)
-            b.setFixedWidth(28)
+            b.setFixedWidth(48)
             b.clicked.connect(slot)
+            b.installEventFilter(self.app)
+            self.nav_buttons.append(b)
             layout.addWidget(b)
 
     def _apply_row_theme(self):
         light = self.app.cfg.get("settings", {}).get("theme", "Dark") == "Light"
         if light:
-            self.setStyleSheet("background: #ffffff; border: 1px solid #ddd; border-radius: 6px;")
-            self.name_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #222; background: transparent;")
+            self.setStyleSheet("* { background: #ffffff; border: 1px solid #ddd; border-radius: 6px; }"
+                               " QPushButton:focus { border: 2px solid #1565c0; background: #d6e6fa; }")
+            self.name_lbl.setStyleSheet("font-weight: bold; font-size: 18px; color: #222; background: transparent;")
             self.ip_lbl.setStyleSheet("color: #555; background: transparent;")
             self.status_lbl.setStyleSheet("color: #666; background: transparent;")
         else:
-            self.setStyleSheet("background: #252525; border-radius: 6px;")
-            self.name_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #fff; background: transparent;")
+            self.setStyleSheet("* { background: #252525; border-radius: 6px; }"
+                               " QPushButton:focus { border: 2px solid #4fc3f7; background: #1d3b4f; }")
+            self.name_lbl.setStyleSheet("font-weight: bold; font-size: 18px; color: #fff; background: transparent;")
             self.ip_lbl.setStyleSheet("color: #aaa; background: transparent;")
             self.status_lbl.setStyleSheet("color: #888; background: transparent;")
 
@@ -420,6 +474,8 @@ class HostDialog(QDialog):
         self.setStyleSheet(dialog_stylesheet(parent))
         self.host = host
         layout = QFormLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
 
         self.name_edit = QLineEdit(host.get("name", "") if host else "")
         self.ip_edit = QLineEdit(host.get("ip", "") if host else "")
@@ -439,6 +495,7 @@ class HostDialog(QDialog):
         btns.addWidget(save_btn)
         btns.addWidget(cancel_btn)
         layout.addRow(btns)
+        fit_dialog_to_screen(self)
 
     def get_data(self) -> dict | None:
         ip = self.ip_edit.text().strip()
@@ -459,6 +516,8 @@ class OptionsDialog(QDialog):
         self.setWindowTitle(t("options"))
         self.setStyleSheet(dialog_stylesheet(parent))
         layout = QFormLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
 
         self.interval = QSpinBox()
         self.interval.setRange(10, 300)
@@ -523,6 +582,7 @@ class OptionsDialog(QDialog):
         btns.addWidget(save)
         btns.addWidget(cancel)
         layout.addRow(btns)
+        fit_dialog_to_screen(self)
 
     def _do_verify(self):
         ok, msg = verify_existing_cli()
@@ -557,6 +617,13 @@ class OptionsDialog(QDialog):
         }
 
 # ---------------------------------------------------------------------------
+# UI only: destructive confirmations default to "No" (controller/Enter safety)
+_YES_NO = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+_NO = QMessageBox.StandardButton.No
+
+_NAV_KEYS = (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
+
+
 class MainWindow(QMainWindow):
     def show_about(self):
         box = QMessageBox(self)
@@ -584,20 +651,24 @@ class MainWindow(QMainWindow):
         self.status_timer.timeout.connect(self.check_status)
 
         self.setWindowTitle(t("app_title"))
-        self.resize(780, 520)
         self.setMinimumSize(640, 420)
         self.apply_theme()
 
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
+        main_layout.setSpacing(10)
 
         # Toolbar
         tb = QHBoxLayout()
+        tb.setSpacing(10)
+        self.toolbar_buttons = []  # UI only: arrow-key navigation
         for text, slot in [(t("add_host"), self.add_host), (t("options"), self.open_options),
                            (t("refresh"), self.check_status)]:
             b = QPushButton(text)
             b.clicked.connect(slot)
+            b.installEventFilter(self)
+            self.toolbar_buttons.append(b)
             tb.addWidget(b)
         tb.addStretch()
         main_layout.addLayout(tb)
@@ -608,6 +679,7 @@ class MainWindow(QMainWindow):
         self.host_widget = QWidget()
         self.host_layout = QVBoxLayout(self.host_widget)
         self.host_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.host_layout.setSpacing(10)
         scroll.setWidget(self.host_widget)
         main_layout.addWidget(scroll)
         self.scroll = scroll
@@ -641,6 +713,11 @@ class MainWindow(QMainWindow):
         self.tray.show()
         self._update_tray_menu()
 
+        # UI only: window size/state memory and screen fitting
+        self._was_shown = False
+        self._restore_window_state()
+        QApplication.instance().aboutToQuit.connect(self._save_window_state)
+
         if self.cfg["settings"].get("auto_status", True):
             interval = self.cfg["settings"].get("status_interval", 30) * 1000
             self.status_timer.start(interval)
@@ -666,7 +743,7 @@ class MainWindow(QMainWindow):
             QPushButton { background: #2d2d2d; color: #e0e0e0; border: 1px solid #444; padding: 4px 8px; border-radius: 3px; }
             QPushButton:hover { background: #3d3d3d; }
             QLineEdit, QSpinBox { background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; padding: 3px; }
-        """)
+        """ + touch_css(False))
 
     def apply_light(self):
         pal = self.palette()
@@ -681,7 +758,7 @@ class MainWindow(QMainWindow):
             QPushButton { background: #e0e0e0; color: #222; border: 1px solid #ccc; padding: 4px 8px; border-radius: 3px; }
             QPushButton:hover { background: #d0d0d0; }
             QLineEdit, QSpinBox { background: #ffffff; color: #222; border: 1px solid #ccc; padding: 3px; }
-        """)
+        """ + touch_css(True))
 
     def _apply_host_area_theme(self):
         if not hasattr(self, "host_widget"):
@@ -758,6 +835,8 @@ class MainWindow(QMainWindow):
             self.host_layout.addWidget(row)
             self.host_rows[h["id"]] = row
         self._update_tray_menu()
+        self._fit_min_size()
+        QTimer.singleShot(0, self._ensure_focus)
 
     def add_host(self):
         dlg = HostDialog(None, self)
@@ -807,7 +886,7 @@ class MainWindow(QMainWindow):
 
     def remove_host(self, host: dict):
         name = host.get("name", host.get("ip"))
-        if QMessageBox.question(self, t("app_title"), t("confirm_remove", name=name)) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, t("app_title"), t("confirm_remove", name=name), _YES_NO, _NO) == QMessageBox.StandardButton.Yes:
             self.cfg["hosts"] = [h for h in self.cfg["hosts"] if h["id"] != host["id"]]
             save_config(self.cfg)
             self.refresh_hosts()
@@ -832,7 +911,7 @@ class MainWindow(QMainWindow):
             return
 
         if action in ("shutdown", "restart", "suspend") and self.cfg["settings"].get("confirm_actions", True):
-            if QMessageBox.question(self, t("app_title"), t(f"confirm_{action}", name=name)) != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, t("app_title"), t(f"confirm_{action}", name=name), _YES_NO, _NO) != QMessageBox.StandardButton.Yes:
                 return
 
         if hid not in self.action_locks:
@@ -1076,6 +1155,7 @@ class MainWindow(QMainWindow):
         (APP_DIR / ".attributed").touch()
 
     def show_normal(self):
+        self._restore_window_state()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -1092,6 +1172,99 @@ class MainWindow(QMainWindow):
         self.status_timer.stop()
         release_lock()
         QApplication.quit()
+
+    # --- UI only: keyboard/controller navigation -------------------------
+    def _nav_grid(self):
+        grid = [self.toolbar_buttons] + [r.nav_buttons for r in self.host_rows.values()]
+        return [row for row in grid if row]
+
+    def _focus_first(self):
+        target = next(iter(self.host_rows.values())).nav_buttons[0] if self.host_rows else self.toolbar_buttons[0]
+        target.setFocus(Qt.FocusReason.TabFocusReason)
+        self.scroll.ensureWidgetVisible(target)
+
+    def _ensure_focus(self):
+        if self.isVisible() and QApplication.activeModalWidget() is None:
+            fw = QApplication.focusWidget()
+            if fw is None or not fw.isVisible() or fw.window() is not self:
+                self._focus_first()
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.KeyPress and isinstance(obj, QPushButton):
+            key = ev.key()
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and ev.modifiers() in (
+                    Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
+                obj.click()
+                return True
+            if key in _NAV_KEYS and ev.modifiers() in (
+                    Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
+                grid = self._nav_grid()
+                for r, row in enumerate(grid):
+                    if obj in row:
+                        c = row.index(obj)
+                        if key == Qt.Key.Key_Left:
+                            c = max(0, c - 1)
+                        elif key == Qt.Key.Key_Right:
+                            c = min(len(row) - 1, c + 1)
+                        else:
+                            r = max(0, r - 1) if key == Qt.Key.Key_Up else min(len(grid) - 1, r + 1)
+                            c = min(c, len(grid[r]) - 1)
+                        target = grid[r][c]
+                        target.setFocus(Qt.FocusReason.TabFocusReason)
+                        self.scroll.ensureWidgetVisible(target)
+                        return True
+        return super().eventFilter(obj, ev)
+
+    # --- UI only: window size/state ----------------------------------------
+    def _available(self):
+        scr = self.screen() or QApplication.primaryScreen()
+        return scr.availableGeometry() if scr else None
+
+    def _fit_min_size(self):
+        avail = self._available()
+        need = max([r.minimumSizeHint().width() for r in self.host_rows.values()] + [640])
+        lm = self.centralWidget().layout().contentsMargins() if self.centralWidget() else None
+        need += (lm.left() + lm.right() if lm else 20) + self.scroll.verticalScrollBar().sizeHint().width() + 6
+        hm = self.host_layout.contentsMargins()
+        need += hm.left() + hm.right() + 2 * self.scroll.frameWidth()
+        w, h = need, 420
+        if avail:
+            w, h = min(w, avail.width()), min(h, avail.height())
+        self.setMinimumSize(w, h)
+
+    def _restore_window_state(self):
+        self._fit_min_size()
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        geo = st.value("geometry")
+        if not (geo and self.restoreGeometry(geo)):
+            avail = self._available()
+            w, h = 900, 640
+            if avail:
+                w = max(min(w, int(avail.width() * 0.9)), min(self.minimumWidth(), avail.width()))
+                h = max(min(h, int(avail.height() * 0.9)), min(self.minimumHeight(), avail.height()))
+            self.resize(w, h)
+        avail = self._available()
+        if avail and not self.isMaximized() and (self.width() > avail.width() or self.height() > avail.height()):
+            self.resize(min(self.width(), avail.width()), min(self.height(), avail.height()))
+
+    def _save_window_state(self):
+        if not self._was_shown:
+            return
+        try:
+            st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+            st.setValue("geometry", self.saveGeometry())
+            st.sync()
+        except Exception:
+            logging.exception("window state save failed")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._was_shown = True
+        QTimer.singleShot(0, self._focus_first)
+
+    def hideEvent(self, event):
+        self._save_window_state()
+        super().hideEvent(event)
 
     def closeEvent(self, event):
         event.ignore()
@@ -1141,7 +1314,7 @@ def main():
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #888; border-radius: 3px; background: #fff; }
             QCheckBox::indicator:checked { background: #4caf50; border-color: #388e3c; }
             QCheckBox::indicator:checked:hover { background: #66bb6a; }
-        """)
+        """ + touch_css(True))
     else:
         app.setStyleSheet("""
             QDialog, QMessageBox { background: #1e1e1e; color: #e0e0e0; }
@@ -1153,7 +1326,7 @@ def main():
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #666; border-radius: 3px; background: #2a2a2a; }
             QCheckBox::indicator:checked { background: #4caf50; border-color: #388e3c; }
             QCheckBox::indicator:checked:hover { background: #66bb6a; }
-        """)
+        """ + touch_css(False))
     app.setApplicationDisplayName("BuddyRemote")
     app.setOrganizationName("BuddyRemote")
     app.setDesktopFileName("buddyremote")
