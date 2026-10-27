@@ -38,15 +38,34 @@ from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPe
 
 # ---------------------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
+# Packaging: read-only resources (lang/, default config, bundled CLI) live next to
+# the code / inside the bundle; writable files go to a user dir when packaged.
+RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+PACKAGED = bool(getattr(sys, "frozen", False) or os.environ.get("APPIMAGE"))
+if PACKAGED:
+    APP_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "BuddyRemote"
 CONFIG_FILE = APP_DIR / "config.json"
 CLI_DIR = APP_DIR / "cli"
 CLI_BIN = CLI_DIR / "moondeck-cli"
 CLI_SCRIPT = CLI_DIR / "cli.py"  # fallback
-LANG_DIR = APP_DIR / "lang"
+LANG_DIR = RES_DIR / "lang"
 LOCK_FILE = APP_DIR / ".lock"
 LOG_FILE = APP_DIR / "buddyremote.log"
 
 # ---------------------------------------------------------------------------
+def prepare_packaged_dir():
+    """Packaging only: create the user dir and seed it from the bundle on first start."""
+    if not PACKAGED:
+        return
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_FILE.exists() and (RES_DIR / "config.json").exists():
+        shutil.copyfile(RES_DIR / "config.json", CONFIG_FILE)
+    bundled_cli = RES_DIR / "bundled" / "moondeck-cli"
+    if not CLI_BIN.exists() and bundled_cli.exists():
+        CLI_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(bundled_cli, CLI_BIN)
+        CLI_BIN.chmod(0o755)
+
 def setup_logging(enabled: bool):
     handlers = [logging.FileHandler(LOG_FILE, encoding="utf-8")] if enabled else [logging.NullHandler()]
     logging.basicConfig(level=logging.DEBUG if enabled else logging.WARNING,
@@ -313,7 +332,7 @@ def set_autostart(enabled: bool):
     d = Path.home() / ".config" / "autostart"
     d.mkdir(parents=True, exist_ok=True)
     f = d / "buddyremote.desktop"
-    launcher = APP_DIR / "BuddyRemote"
+    launcher = os.environ.get("APPIMAGE") or (sys.executable if getattr(sys, "frozen", False) else APP_DIR / "BuddyRemote")
     if enabled:
         f.write_text(f"""[Desktop Entry]
 Type=Application
@@ -1101,6 +1120,7 @@ class DownloadDialog(QDialog):
         QApplication.processEvents()
 
 def main():
+    prepare_packaged_dir()
     if not acquire_lock():
         print("BuddyRemote is already running.")
         sys.exit(0)
