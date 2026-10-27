@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QDialog, QFormLayout,
     QLineEdit, QCheckBox, QSpinBox, QMessageBox, QSystemTrayIcon, QMenu,
-    QTextEdit, QComboBox
+    QTextEdit, QComboBox, QAbstractButton
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings
 from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen
@@ -96,6 +96,8 @@ def touch_css(light: bool) -> str:
     Appended after each theme stylesheet so it overrides sizes, not colors."""
     acc = "#1565c0" if light else "#4fc3f7"
     focus_bg = "#d6e6fa" if light else "#1d3b4f"
+    edit = "#e65100" if light else "#ffb74d"
+    edit_bg = "#fff3e0" if light else "#2b2620"
     return f"""
         QWidget {{ font-size: 15px; }}
         QPushButton {{ min-height: 32px; min-width: 24px; padding: 6px 10px; border-width: 2px; border-radius: 6px; }}
@@ -108,7 +110,128 @@ def touch_css(light: bool) -> str:
         QCheckBox {{ spacing: 12px; min-height: 34px; padding: 2px 6px; border: 2px solid transparent; border-radius: 6px; }}
         QCheckBox:focus {{ border: 2px solid {acc}; background: {focus_bg}; }}
         QCheckBox::indicator {{ width: 26px; height: 26px; }}
+        QLineEdit[editMode="true"], QSpinBox[editMode="true"], QComboBox[editMode="true"] {{ border: 2px solid {edit}; background: {edit_bg}; }}
     """
+
+
+class _DialogNavFilter(QObject):
+    """UI only: controller-friendly focus handling inside dialogs.
+    Fields (line edits, spin boxes, combo boxes) have two states:
+      navigation = focused + highlighted; arrows move focus, Enter enters edit mode
+      edit mode  = amber border; keys edit the value; Enter accepts, Escape reverts.
+    Mouse click or typing a character enters edit mode immediately (desktop-first).
+    Enter on a field never triggers the dialog's default button."""
+    _ARROWS = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right)
+    _ENTER = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+    _MODS = (Qt.Key.Key_Shift, Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Meta,
+             Qt.Key.Key_AltGr, Qt.Key.Key_CapsLock, Qt.Key.Key_NumLock)
+
+    def __init__(self, dlg: QDialog):
+        super().__init__(dlg)
+        self.dlg = dlg
+        self.fields = set()
+        self.saved = {}
+        for w in dlg.findChildren(QWidget):
+            if isinstance(w, (QLineEdit, QSpinBox, QComboBox)) and not isinstance(w.parent(), (QSpinBox, QComboBox)):
+                self.fields.add(w)
+                w.setProperty("editMode", False)
+                w.installEventFilter(self)
+                if isinstance(w, QSpinBox):
+                    w.lineEdit().installEventFilter(self)  # mouse clicks land on the inner edit
+            elif isinstance(w, QAbstractButton):
+                w.installEventFilter(self)
+
+    @staticmethod
+    def _value(w):
+        if isinstance(w, QLineEdit):
+            return w.text()
+        if isinstance(w, QSpinBox):
+            return w.value()
+        return w.currentIndex()
+
+    @staticmethod
+    def _restore(w, v):
+        if isinstance(w, QLineEdit):
+            w.setText(v)
+        elif isinstance(w, QSpinBox):
+            w.setValue(v)
+        else:
+            w.setCurrentIndex(v)
+
+    def editing(self, w) -> bool:
+        return bool(w.property("editMode"))
+
+    def _set_edit(self, w, on: bool):
+        if self.editing(w) == on:
+            return
+        if on:
+            self.saved[w] = self._value(w)
+        w.setProperty("editMode", on)
+        w.style().unpolish(w)
+        w.style().polish(w)
+        w.update()
+
+    def _move(self, forward: bool):
+        self.dlg.focusNextPrevChild(forward)
+        fw = QApplication.focusWidget()
+        p = fw.parent() if fw else None
+        while p is not None and p is not self.dlg:
+            if isinstance(p, QScrollArea):
+                p.ensureWidgetVisible(fw)
+                break
+            p = p.parent()
+
+    def eventFilter(self, obj, ev):
+        et = ev.type()
+        field = obj if obj in self.fields else (obj.parent() if obj.parent() in self.fields else None)
+        if field is None:  # buttons / checkboxes: arrows move focus, Enter on a checkbox toggles it
+            if et == QEvent.Type.KeyPress and not ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+                if ev.key() in self._ARROWS:
+                    self._move(ev.key() in (Qt.Key.Key_Down, Qt.Key.Key_Right))
+                    return True
+                if ev.key() in self._ENTER and isinstance(obj, QCheckBox):
+                    obj.click()
+                    return True
+            return False
+        if et == QEvent.Type.MouseButtonPress and not isinstance(field, QComboBox):
+            self._set_edit(field, True)
+        elif et == QEvent.Type.FocusIn and obj is field:
+            if ev.reason() == Qt.FocusReason.MouseFocusReason and not isinstance(field, QComboBox):
+                self._set_edit(field, True)
+        elif et == QEvent.Type.FocusOut and obj is field:
+            if ev.reason() != Qt.FocusReason.PopupFocusReason:
+                self._set_edit(field, False)  # leaving a field keeps (accepts) its value
+        elif et == QEvent.Type.KeyPress and obj is field:
+            key = ev.key()
+            if self.editing(field):
+                if key in self._ENTER:
+                    self._set_edit(field, False)
+                    return True
+                if key == Qt.Key.Key_Escape:
+                    self._restore(field, self.saved.get(field, self._value(field)))
+                    self._set_edit(field, False)
+                    return True
+                return False
+            # navigation mode
+            if key in self._ARROWS and not ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+                self._move(key in (Qt.Key.Key_Down, Qt.Key.Key_Right))
+                return True
+            if key in self._ENTER:
+                self._set_edit(field, True)
+                le = field if isinstance(field, QLineEdit) else (field.lineEdit() if isinstance(field, QSpinBox) else None)
+                if le is not None:
+                    le.deselect()
+                    le.end(False)  # cursor at the end, ready to edit with arrows/keyboard
+                return True
+            if key in (Qt.Key.Key_Escape, Qt.Key.Key_Tab, Qt.Key.Key_Backtab) or key in self._MODS:
+                return False
+            self._set_edit(field, True)  # typing / Backspace / paste etc. edits right away
+            return False
+        return False
+
+
+def install_dialog_nav(dlg: QDialog):
+    dlg._nav_filter = _DialogNavFilter(dlg)
 
 
 def fit_dialog_to_screen(dlg: QDialog):
@@ -495,6 +618,7 @@ class HostDialog(QDialog):
         btns.addWidget(save_btn)
         btns.addWidget(cancel_btn)
         layout.addRow(btns)
+        install_dialog_nav(self)
         fit_dialog_to_screen(self)
 
     def get_data(self) -> dict | None:
@@ -582,6 +706,7 @@ class OptionsDialog(QDialog):
         btns.addWidget(save)
         btns.addWidget(cancel)
         layout.addRow(btns)
+        install_dialog_nav(self)
         fit_dialog_to_screen(self)
 
     def _do_verify(self):
