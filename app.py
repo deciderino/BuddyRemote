@@ -31,10 +31,10 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QDialog, QFormLayout,
     QLineEdit, QCheckBox, QSpinBox, QMessageBox, QSystemTrayIcon, QMenu,
-    QTextEdit, QComboBox, QAbstractButton
+    QTextEdit, QComboBox, QAbstractButton, QStatusBar
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings
-from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen
+from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics
 
 # ---------------------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
@@ -98,11 +98,16 @@ def touch_css(light: bool) -> str:
     focus_bg = "#d6e6fa" if light else "#1d3b4f"
     edit = "#e65100" if light else "#ffb74d"
     edit_bg = "#fff3e0" if light else "#2b2620"
+    prim, prim_b, prim_h = ("#1565c0", "#0d47a1", "#1976d2") if light else ("#1f5f8b", "#2a7ab0", "#2670a3")
     return f"""
         QWidget {{ font-size: 15px; }}
         QPushButton {{ min-height: 32px; min-width: 24px; padding: 6px 10px; border-width: 2px; border-radius: 6px; }}
         QPushButton:focus {{ border: 2px solid {acc}; background: {focus_bg}; }}
-        QPushButton[touchRole="action"] {{ min-width: 72px; }}
+        QPushButton[touchRole="action"] {{ min-width: 56px; }}
+        QPushButton[touchRole="icon"] {{ min-width: 24px; padding: 6px 2px; }}
+        QPushButton[primary="true"] {{ background: {prim}; color: #ffffff; border: 2px solid {prim_b}; }}
+        QPushButton[primary="true"]:hover {{ background: {prim_h}; }}
+        QPushButton[primary="true"]:focus {{ background: {prim_h}; border: 2px solid {acc}; }}
         QMessageBox QPushButton, QDialog QPushButton {{ min-width: 80px; }}
         QLineEdit, QSpinBox, QComboBox {{ min-height: 36px; padding: 4px 8px; border-width: 2px; border-radius: 4px; }}
         QDialog QLineEdit {{ min-width: 260px; }}
@@ -519,75 +524,233 @@ class Signals(QObject):
     action_done = pyqtSignal(str, bool, str)  # title, success, message
 
 # ---------------------------------------------------------------------------
+# UI only: colours for the main window (cards, status dots, toasts, status bar)
+def ui_colors(light: bool) -> dict:
+    if light:
+        return dict(card="#ffffff", card_b="#dcdcdc", cur="#eaf2fc", cur_b="#1565c0", name="#222222",
+                    pill="#e8e8e8", pill_t="#555555", sub="#666666", err="#c62828",
+                    online="#43a047", offline="#9e9e9e", busy="#ffb300", error="#e53935", unknown="#c8c8c8",
+                    bar="#ececec", bar_b="#d0d0d0", bar_t="#555555", tb_b="#d8d8d8",
+                    ok_bg="#e8f5e9", ok_b="#43a047", ok_t="#1b5e20",
+                    er_bg="#ffebee", er_b="#e53935", er_t="#b71c1c",
+                    in_bg="#fff8e1", in_b="#ffb300", in_t="#5d4037", dim="#666666")
+    return dict(card="#262626", card_b="#303030", cur="#24313a", cur_b="#4fc3f7", name="#ffffff",
+                pill="#333333", pill_t="#bbbbbb", sub="#9a9a9a", err="#ef9a9a",
+                online="#43a047", offline="#757575", busy="#ffb300", error="#e53935", unknown="#4a4a4a",
+                bar="#252525", bar_b="#333333", bar_t="#aaaaaa", tb_b="#2e2e2e",
+                ok_bg="#2e3b2f", ok_b="#43a047", ok_t="#e6e6e6",
+                er_bg="#3b2a2a", er_b="#e53935", er_t="#e6e6e6",
+                in_bg="#3a3424", in_b="#ffb300", in_t="#e6e6e6", dim="#a8a8a8")
+
+
 class HostRow(QFrame):
+    """One host as a card: status dot, name + IP pill, status line, and one visible
+    button per existing action. UI only; every button calls the same handler as before."""
     def __init__(self, host: dict, parent_app):
         super().__init__()
         self.host = host
         self.app = parent_app
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("hostCard")
+        self.setProperty("current", False)
+        self.state = "unknown"      # UI only: online / offline / unknown (last status check)
+        self.busy = False           # UI only: an action is running for this host
+        self.failed = False         # UI only: the last action failed
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(14, 10, 10, 10)
         layout.setSpacing(6)
         self.nav_buttons = []  # UI only: arrow-key navigation order
 
-        info = QVBoxLayout()
-        self.name_lbl = QLabel(host.get("name", "Unnamed"))
-        self.ip_lbl = QLabel(host.get("ip", ""))
-        self.status_lbl = QLabel(t("unknown"))
-        self.name_lbl.setWordWrap(True)
-        self.ip_lbl.setWordWrap(True)
-        self._apply_row_theme()
-        info.addWidget(self.name_lbl)
-        info.addWidget(self.ip_lbl)
-        info.addWidget(self.status_lbl)
-        layout.addLayout(info, 1)
+        self.dot = QLabel()
+        self.dot.setFixedSize(14, 14)
+        layout.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addSpacing(4)
 
-        # Action buttons
+        info = QVBoxLayout()
+        info.setSpacing(2)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self.name_lbl = QLabel(host.get("name", "Unnamed"))
+        self.name_lbl.setObjectName("hostName")
+        self.name_lbl.setWordWrap(True)
+        nf = self.name_lbl.font()
+        nf.setBold(True)
+        nf.setPixelSize(16)
+        self.name_lbl.setMinimumWidth(min(QFontMetrics(nf).horizontalAdvance(self.name_lbl.text()) + 6, 220))
+        self.ip_lbl = QLabel(host.get("ip", ""))
+        self.ip_lbl.setObjectName("ipPill")
+        top.addWidget(self.name_lbl, 0)
+        top.addWidget(self.ip_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addStretch(1)
+        self.status_lbl = QLabel()
+        self.status_lbl.setObjectName("hostSub")
+        self.status_lbl.setWordWrap(True)
+        self.error_lbl = QLabel()
+        self.error_lbl.setObjectName("hostError")
+        self.error_lbl.setWordWrap(True)
+        self.error_lbl.hide()
+        info.addLayout(top)
+        info.addWidget(self.status_lbl)
+        info.addWidget(self.error_lbl)
+        layout.addLayout(info, 1)
+        self._status_text = t("unknown")
+        self._checked = ""
+
+        # Action buttons (same handlers as before)
         for act, label in [("wake", t("wake")), ("shutdown", t("shutdown")),
                            ("restart", t("restart")), ("suspend", t("suspend"))]:
             btn = QPushButton(label)
             btn.setProperty("touchRole", "action")  # min width via touch_css
+            if act == "wake":
+                btn.setProperty("primary", True)
+            btn.setToolTip(t(f"tip_{act}"))
             btn.clicked.connect(lambda _, a=act: self.app.do_action(self.host, a))
             btn.installEventFilter(self.app)
             self.nav_buttons.append(btn)
             layout.addWidget(btn)
 
+        layout.addSpacing(6)
         # Controls
-        for text, slot in [("↑", lambda: self.app.move_host(self.host, -1)),
-                           ("↓", lambda: self.app.move_host(self.host, 1)),
-                           ("✎", lambda: self.app.edit_host(self.host)),
-                           ("✕", lambda: self.app.remove_host(self.host))]:
+        for text, tip, slot in [("↑", "tip_up", lambda: self.app.move_host(self.host, -1)),
+                                ("↓", "tip_down", lambda: self.app.move_host(self.host, 1)),
+                                ("✎", "tip_edit", lambda: self.app.edit_host(self.host)),
+                                ("✕", "tip_remove", lambda: self.app.remove_host(self.host))]:
             b = QPushButton(text)
-            b.setFixedWidth(48)
+            b.setProperty("touchRole", "icon")
+            b.setFixedWidth(40)
+            b.setToolTip(t(tip))
             b.clicked.connect(slot)
             b.installEventFilter(self.app)
             self.nav_buttons.append(b)
             layout.addWidget(b)
 
+        self._apply_row_theme()
+        self._render()
+
+    def _light(self) -> bool:
+        return self.app.cfg.get("settings", {}).get("theme", "Dark") == "Light"
+
     def _apply_row_theme(self):
-        light = self.app.cfg.get("settings", {}).get("theme", "Dark") == "Light"
-        if light:
-            self.setStyleSheet("* { background: #ffffff; border: 1px solid #ddd; border-radius: 6px; }"
-                               " QPushButton:focus { border: 2px solid #1565c0; background: #d6e6fa; }")
-            self.name_lbl.setStyleSheet("font-weight: bold; font-size: 18px; color: #222; background: transparent;")
-            self.ip_lbl.setStyleSheet("color: #555; background: transparent;")
-            self.status_lbl.setStyleSheet("color: #666; background: transparent;")
+        c = ui_colors(self._light())
+        self.setStyleSheet(f"""
+            QFrame#hostCard {{ background: {c['card']}; border: 1px solid {c['card_b']}; border-radius: 8px; }}
+            QFrame#hostCard[current="true"] {{ background: {c['cur']}; border: 1px solid {c['cur_b']}; }}
+            QFrame#hostCard QLabel {{ background: transparent; border: none; }}
+            QFrame#hostCard QLabel#hostName {{ font-weight: bold; font-size: 16px; color: {c['name']}; }}
+            QFrame#hostCard QLabel#ipPill {{ font-size: 12px; color: {c['pill_t']}; background: {c['pill']}; border-radius: 9px; padding: 1px 8px; }}
+            QFrame#hostCard QLabel#hostSub {{ font-size: 13px; color: {c['sub']}; }}
+            QFrame#hostCard QLabel#hostError {{ font-size: 13px; color: {c['err']}; }}
+        """)
+        self._render()
+
+    def _render(self):
+        """UI only: paint dot and status line from the current UI state."""
+        if not hasattr(self, "dot"):
+            return
+        c = ui_colors(self._light())
+        if self.busy:
+            col = c["busy"]
+        elif self.failed:
+            col = c["error"]
         else:
-            self.setStyleSheet("* { background: #252525; border-radius: 6px; }"
-                               " QPushButton:focus { border: 2px solid #4fc3f7; background: #1d3b4f; }")
-            self.name_lbl.setStyleSheet("font-weight: bold; font-size: 18px; color: #fff; background: transparent;")
-            self.ip_lbl.setStyleSheet("color: #aaa; background: transparent;")
-            self.status_lbl.setStyleSheet("color: #888; background: transparent;")
+            col = c.get(self.state, c["unknown"])
+        self.dot.setStyleSheet(f"background: {col}; border-radius: 7px; border: none;")
+        if self.busy:
+            parts = ["⟳ " + t("working")]
+        else:
+            parts = [self._status_text]
+            if self._checked:
+                parts.append(t("checked_at", time=self._checked))
+        if not self.host.get("mac"):
+            parts.append(t("no_mac_short"))
+        self.status_lbl.setText(" · ".join(parts))
 
     def set_status(self, text: str):
-        self.status_lbl.setText(text)
-        color = "#888"
-        if text == t("online"):
-            color = "#2e7d32" if self.app.cfg.get("settings", {}).get("theme") == "Light" else "#4caf50"
-        elif text == t("offline"):
-            color = "#c62828" if self.app.cfg.get("settings", {}).get("theme") == "Light" else "#f44336"
-        self.status_lbl.setStyleSheet(f"color: {color};")
+        self._status_text = text
+        self.state = "online" if text == t("online") else ("offline" if text == t("offline") else "unknown")
+        self._checked = time.strftime("%H:%M:%S")
+        self.failed = False
+        self._render()
+        self.app._update_counts()
+
+    def set_busy(self, on: bool):
+        self.busy = on
+        if on:
+            self.failed = False
+            self.error_lbl.hide()
+        self._render()
+
+    def set_failed(self, text: str):
+        self.busy = False
+        self.failed = True
+        self.error_lbl.setText("⚠ " + text)
+        self.error_lbl.setToolTip(text)
+        self.error_lbl.show()
+        self._render()
+
+    def set_current(self, on: bool):
+        if bool(self.property("current")) == on:
+            return
+        self.setProperty("current", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+
+class Toast(QFrame):
+    """UI only: non-blocking feedback in the main window (bottom right), fades out
+    automatically; click to dismiss. kind: ok (green), error (red), info (amber)."""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("toast")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(2)
+        self.title = QLabel()
+        self.title.setWordWrap(True)
+        self.title.setObjectName("toastTitle")
+        self.detail = QLabel()
+        self.detail.setWordWrap(True)
+        self.detail.setObjectName("toastDetail")
+        lay.addWidget(self.title)
+        lay.addWidget(self.detail)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.hide)
+        self.hide()
+
+    def show_message(self, title: str, detail: str, kind: str, light: bool, ms: int):
+        c = ui_colors(light)
+        bg, b, fg = {"ok": ("ok_bg", "ok_b", "ok_t"), "error": ("er_bg", "er_b", "er_t"),
+                     "info": ("in_bg", "in_b", "in_t")}[kind]
+        icon = {"ok": "✓", "error": "⚠", "info": "ℹ"}[kind]
+        self.setStyleSheet(f"""
+            QFrame#toast {{ background: {c[bg]}; border: 1px solid {c[b]}; border-radius: 8px; }}
+            QFrame#toast QLabel {{ background: transparent; border: none; color: {c[fg]}; }}
+            QLabel#toastTitle {{ font-size: 14px; font-weight: bold; }}
+            QLabel#toastDetail {{ font-size: 13px; color: {c['dim']}; }}
+        """)
+        self.title.setText(f"{icon}  {title}")
+        self.detail.setText(detail)
+        self.detail.setVisible(bool(detail))
+        self.place()
+        self.show()
+        self.raise_()
+        self.timer.start(ms)
+
+    def place(self):
+        par = self.parentWidget()
+        if not par:
+            return
+        w = min(380, max(220, par.width() - 28))
+        self.setFixedWidth(w)
+        self.adjustSize()
+        bottom = getattr(par.window(), "_toast_bottom", lambda: par.height() - 14)()
+        self.move(par.width() - w - 14, bottom - self.height())
+
+    def mousePressEvent(self, ev):
+        self.hide()
 
 # ---------------------------------------------------------------------------
 class HostDialog(QDialog):
@@ -723,11 +886,11 @@ class OptionsDialog(QDialog):
                 text += f"\n{vtime}"
             self.verify_label.setText(text)
             self.verify_label.setStyleSheet("color: #4caf50;")
-            QMessageBox.information(self, "BuddyRemote", "Checksum verified.")
+            notify(self.parent(), t("checksum_verified"), kind="ok")  # UI: toast instead of popup
         else:
             self.verify_label.setText(msg)
             self.verify_label.setStyleSheet("color: #f44336;")
-            QMessageBox.warning(self, "BuddyRemote", f"Verification failed:\n{msg}")
+            notify(self.parent(), t("verify_failed"), msg, kind="error")  # UI: toast instead of popup
 
     def get_settings(self) -> dict:
         return {
@@ -747,6 +910,12 @@ _YES_NO = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
 _NO = QMessageBox.StandardButton.No
 
 _NAV_KEYS = (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
+
+
+def notify(win, title: str, detail: str = "", kind: str = "ok"):
+    """UI only: non-blocking feedback (toast in the main window) instead of an info popup."""
+    if win is not None and hasattr(win, "show_toast"):
+        win.show_toast(title, detail, kind)
 
 
 class MainWindow(QMainWindow):
@@ -782,46 +951,93 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
         # Toolbar
-        tb = QHBoxLayout()
-        tb.setSpacing(10)
+        self.toolbar = QWidget()
+        self.toolbar.setObjectName("toolbar")
+        tb = QHBoxLayout(self.toolbar)
+        tb.setContentsMargins(12, 8, 12, 8)
+        tb.setSpacing(8)
         self.toolbar_buttons = []  # UI only: arrow-key navigation
-        for text, slot in [(t("add_host"), self.add_host), (t("options"), self.open_options),
-                           (t("refresh"), self.check_status)]:
+        for text, tip, slot in [("＋  " + t("add_host"), "tip_add", self.add_host),
+                                ("⟳  " + t("refresh"), "tip_refresh", self.check_status),
+                                ("⚙  " + t("options"), "tip_options", self.open_options)]:
             b = QPushButton(text)
+            b.setToolTip(t(tip))
             b.clicked.connect(slot)
             b.installEventFilter(self)
             self.toolbar_buttons.append(b)
             tb.addWidget(b)
         tb.addStretch()
-        main_layout.addLayout(tb)
+        main_layout.addWidget(self.toolbar)
+
+        body = QWidget()
+        self._body_layout = QVBoxLayout(body)
+        self._body_layout.setContentsMargins(12, 10, 12, 6)
+        self._body_layout.setSpacing(6)
+        main_layout.addWidget(body, 1)
 
         # Scroll area for hosts
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.host_widget = QWidget()
+        self.host_widget.setObjectName("hostArea")
         self.host_layout = QVBoxLayout(self.host_widget)
+        self.host_layout.setContentsMargins(0, 0, 0, 0)
         self.host_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.host_layout.setSpacing(10)
+        self.host_layout.setSpacing(8)
         scroll.setWidget(self.host_widget)
-        main_layout.addWidget(scroll)
+        self._body_layout.addWidget(scroll, 1)
         self.scroll = scroll
         self._apply_host_area_theme()
 
-        self.status_bar = QLabel("")
-        self.status_bar.setStyleSheet("color: #888; padding: 4px;")
-        main_layout.addWidget(self.status_bar)
+        # Collapsible log (UI only; same log content as before)
+        self.log_btn = QPushButton()
+        self.log_btn.setObjectName("logToggle")
+        self.log_btn.setToolTip(t("tip_log"))
+        self.log_btn.clicked.connect(self.toggle_log)
+        self.log_btn.installEventFilter(self)
+        log_row = QHBoxLayout()
+        log_row.addWidget(self.log_btn)
+        log_row.addStretch()
+        self._body_layout.addLayout(log_row)
 
         # Output log (read-only)
         self.output = QTextEdit()
         self.output.setReadOnly(True)
-        self.output.setMaximumHeight(120)
+        self.output.setMaximumHeight(150)
         self._apply_output_theme()
-        main_layout.addWidget(self.output)
+        self._body_layout.addWidget(self.output)
+
+        # Status bar: last message (left), counts / auto refresh / CLI (right)
+        self.status_bar = QLabel("")
+        self.count_lbl = QLabel("")
+        self.refresh_lbl = QLabel("")
+        self.cli_lbl = QLabel("")
+        sb = QStatusBar()
+        sb.setSizeGripEnabled(False)
+        sb.addWidget(self.status_bar, 1)
+        for w in (self.count_lbl, self.refresh_lbl, self.cli_lbl):
+            sb.addPermanentWidget(w)
+        self.setStatusBar(sb)
+        self._apply_chrome_theme()
+
+        # Toast overlay (UI only)
+        self.toast = Toast(central)
+
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        self._set_log_visible(str(st.value("log_visible", "false")).lower() == "true")
+
+        # UI only: keyboard shortcuts for existing toolbar actions
+        for seq, slot in [("F5", self.check_status), ("Ctrl+N", self.add_host),
+                          ("Ctrl+,", self.open_options), ("Ctrl+L", self.toggle_log)]:
+            QShortcut(QKeySequence(seq), self, activated=slot)
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
 
         self.refresh_hosts()
+        self._update_status_bar()
 
         # Tray icon
         self.tray = QSystemTrayIcon(self)
@@ -890,10 +1106,10 @@ class MainWindow(QMainWindow):
             return
         light = self.cfg.get("settings", {}).get("theme", "Dark") == "Light"
         if light:
-            self.host_widget.setStyleSheet("background: #f5f5f5;")
+            self.host_widget.setStyleSheet("QWidget#hostArea { background: #f5f5f5; }")
             self.scroll.setStyleSheet("QScrollArea { border: none; background: #f5f5f5; }")
         else:
-            self.host_widget.setStyleSheet("background: #1e1e1e;")
+            self.host_widget.setStyleSheet("QWidget#hostArea { background: #1e1e1e; }")
             self.scroll.setStyleSheet("QScrollArea { border: none; background: #1e1e1e; }")
 
     def _apply_output_theme(self):
@@ -905,6 +1121,25 @@ class MainWindow(QMainWindow):
         else:
             self.output.setStyleSheet("QTextEdit { background: #1a1a1a; color: #ccc; border: 1px solid #333; font-family: monospace; }")
 
+    def _light(self) -> bool:
+        return self.cfg.get("settings", {}).get("theme", "Dark") == "Light"
+
+    def _apply_chrome_theme(self):
+        """UI only: toolbar, log toggle and status bar colours."""
+        if not hasattr(self, "toolbar"):
+            return
+        c = ui_colors(self._light())
+        self.toolbar.setStyleSheet(f"QWidget#toolbar {{ border-bottom: 1px solid {c['tb_b']}; }}")
+        self.log_btn.setStyleSheet(
+            f"QPushButton#logToggle {{ background: transparent; border: 2px solid transparent; color: {c['bar_t']};"
+            f" text-align: left; padding: 4px 8px; min-height: 26px; font-size: 13px; }}"
+            f" QPushButton#logToggle:hover {{ color: {c['name']}; }}"
+            f" QPushButton#logToggle:focus {{ border: 2px solid {c['cur_b']}; }}")
+        self.statusBar().setStyleSheet(
+            f"QStatusBar {{ background: {c['bar']}; border-top: 1px solid {c['bar_b']}; }}"
+            f" QStatusBar::item {{ border: none; }}"
+            f" QStatusBar QLabel {{ color: {c['bar_t']}; font-size: 13px; padding: 3px 8px; }}")
+
     def apply_theme(self):
         theme = self.cfg["settings"].get("theme", "Dark")
         if theme == "Light":
@@ -913,6 +1148,7 @@ class MainWindow(QMainWindow):
             self.apply_dark()
         self._apply_output_theme()
         self._apply_host_area_theme()
+        self._apply_chrome_theme()
         # refresh host rows if layout already exists
         if hasattr(self, "host_layout"):
             for i in range(self.host_layout.count()):
@@ -953,6 +1189,7 @@ class MainWindow(QMainWindow):
             lbl.setStyleSheet(f"color: {col}; padding: 20px; background: transparent;")
             self.host_layout.addWidget(lbl)
             self._update_tray_menu()
+            self._update_counts()
             return
 
         for h in hosts:
@@ -960,6 +1197,7 @@ class MainWindow(QMainWindow):
             self.host_layout.addWidget(row)
             self.host_rows[h["id"]] = row
         self._update_tray_menu()
+        self._update_counts()
         self._fit_min_size()
         QTimer.singleShot(0, self._ensure_focus)
 
@@ -1004,8 +1242,7 @@ class MainWindow(QMainWindow):
                             break
                     save_config(self.cfg)
                     logging.info("MAC auto-saved: %s", mac)
-                    QTimer.singleShot(0, lambda: QMessageBox.information(
-                        self, t("app_title"), t("mac_updated", mac=mac)))
+                    QTimer.singleShot(0, lambda: notify(self, t("mac_updated", mac=mac)))
         except Exception:
             logging.exception("Failed to fetch MAC")
 
@@ -1032,7 +1269,7 @@ class MainWindow(QMainWindow):
         name = host.get("name", host.get("ip"))
 
         if action == "wake" and not host.get("mac"):
-            QMessageBox.warning(self, t("app_title"), t("no_mac"))
+            notify(self, t("no_mac"), kind="error")
             return
 
         if action in ("shutdown", "restart", "suspend") and self.cfg["settings"].get("confirm_actions", True):
@@ -1042,7 +1279,7 @@ class MainWindow(QMainWindow):
         if hid not in self.action_locks:
             self.action_locks[hid] = threading.Lock()
         if not self.action_locks[hid].acquire(blocking=False):
-            QMessageBox.information(self, t("app_title"), t("action_running"))
+            notify(self, t("action_running"), kind="info")
             return
 
         def worker():
@@ -1095,8 +1332,8 @@ class MainWindow(QMainWindow):
         # Pre-check: can we reach Buddy's API?
         ok, msg = check_buddy_api(ip, host.get("buddy_port", 59999))
         if not ok:
-            QMessageBox.critical(self, t("pairing_title"),
-                f"Cannot reach Buddy at {ip}:{host.get('buddy_port', 59999)}\n\n{msg}\n\nCheck that Buddy is running and the port is open.")
+            notify(self, t("pairing_unreachable", ip=ip, port=host.get('buddy_port', 59999)),
+                   f"{msg}\n\n" + t("pairing_unreachable_hint"), kind="error")
             return
         self.log_output(f"Buddy reachable: {msg}")
 
@@ -1161,10 +1398,10 @@ class MainWindow(QMainWindow):
                     pass
                 try:
                     if result["ok"]:
-                        QMessageBox.information(self, t("pairing_title"), t("pairing_success"))
+                        notify(self, t("pairing_success"), kind="ok")
                     else:
                         msg = result["msg"] or "Unknown error"
-                        QMessageBox.critical(self, t("pairing_title"), t("pairing_failed") + "\n\n" + msg[:500])
+                        notify(self, t("pairing_failed"), msg[:500], kind="error")
                 except Exception as e:
                     logging.exception("Dialog error")
                 return
@@ -1206,19 +1443,30 @@ class MainWindow(QMainWindow):
         if row:
             row.set_status(status)
 
+    def _rows_named(self, title: str):
+        """UI only: rows whose display name matches an action_done title."""
+        return [r for r in self.host_rows.values() if r.host.get("name", r.host.get("ip")) == title]
+
     def on_action_done(self, title: str, success: bool, msg: str):
         if msg == "running":
             self.log_output(f"Running action on {title}...")
             self.status_bar.setText(f"Working...")
+            for r in self._rows_named(title):
+                r.set_busy(True)
             return
         self.status_bar.setText("")
         self.log_output(f"[{title}] {'OK' if success else 'FAIL'}: {msg}")
+        for r in self._rows_named(title):
+            if success:
+                r.set_busy(False)
+            else:
+                r.set_failed(t("action_failed", title=title) + " " + (msg.splitlines()[0][:120] if msg else ""))
         if success and "wake" in title.lower():
-            QMessageBox.information(self, t("app_title"), "Wake signal sent")
+            notify(self, t("wake_sent"), kind="ok")
         elif success:
-            QMessageBox.information(self, t("app_title"), f"{title}: Done")
+            notify(self, t("action_ok", title=title), kind="ok")
         else:
-            QMessageBox.critical(self, t("app_title"), f"{title} failed.\n\nHost may be unreachable or Buddy is not responding.\n\n{msg[:200]}")
+            notify(self, t("action_failed", title=title), t("action_failed_hint") + f"\n\n{msg[:200]}", kind="error")
 
     def open_options(self):
         dlg = OptionsDialog(self.cfg["settings"], self)
@@ -1233,9 +1481,8 @@ class MainWindow(QMainWindow):
                 self.status_timer.start(new["status_interval"] * 1000)
             else:
                 self.status_timer.stop()
-            if theme_changed:
-                QMessageBox.information(self, t("app_title"), "Theme changed. Restart required.")
-            QMessageBox.information(self, t("app_title"), t("settings_saved"))
+            self._update_status_bar()
+            notify(self, t("settings_saved"), t("theme_restart") if theme_changed else "", kind="ok")
 
     def _make_tray_icon(self, online: bool) -> QIcon:
         pix = QPixmap(22, 22)
@@ -1298,9 +1545,77 @@ class MainWindow(QMainWindow):
         release_lock()
         QApplication.quit()
 
+    # --- UI only: toast, status bar, log toggle ----------------------------
+    def show_toast(self, title: str, detail: str = "", kind: str = "ok"):
+        """Non-blocking feedback: toast + status bar + log (replaces info popups).
+        While the window is hidden in the tray, the tray balloon is used instead."""
+        title = title.strip()
+        if "\n" in title and not detail:
+            title, detail = title.split("\n", 1)
+        detail = detail.strip()
+        self.log_output(("ERROR: " if kind == "error" else "") + title + (f" – {detail}" if detail else ""))
+        self.status_bar.setText(title)
+        if not self.isVisible():
+            icon = QSystemTrayIcon.MessageIcon.Critical if kind == "error" else QSystemTrayIcon.MessageIcon.Information
+            self.tray.showMessage("BuddyRemote", title + (f"\n{detail}" if detail else ""), icon, 5000)
+            return
+        if len(detail) > 300:
+            detail = detail[:300] + "…"
+        self.toast.show_message(title, detail, kind, self._light(), 9000 if kind == "error" else 4500)
+
+    def _toast_bottom(self):
+        """Toast sits just above the log toggle (bottom right of the host list)."""
+        cw = self.centralWidget()
+        return self.scroll.mapTo(cw, self.scroll.rect().bottomLeft()).y() - 8
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "toast") and self.toast.isVisible():
+            self.toast.place()
+
+    def _update_counts(self):
+        if not hasattr(self, "count_lbl"):
+            return
+        n = len(self.host_rows)
+        on = sum(1 for r in self.host_rows.values() if r.state == "online")
+        self.count_lbl.setText(t("count_hosts", n=n, online=on))
+
+    def _update_status_bar(self):
+        st = self.cfg.get("settings", {})
+        if st.get("auto_status", True):
+            self.refresh_lbl.setText(t("auto_refresh_every", s=st.get("status_interval", 30)))
+        else:
+            self.refresh_lbl.setText(t("auto_refresh_off"))
+        self.cli_lbl.setText("MoonDeck CLI " + ("✓" if cli_available() else "✗"))
+        self._update_counts()
+
+    def _set_log_visible(self, on: bool):
+        self.output.setVisible(on)
+        self.log_btn.setText(("▾ " if on else "▸ ") + t("log_toggle"))
+        if hasattr(self, "toast") and self.toast.isVisible():
+            QTimer.singleShot(0, self.toast.place)
+
+    def toggle_log(self):
+        on = not self.output.isVisible()
+        self._set_log_visible(on)
+        try:
+            st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+            st.setValue("log_visible", "true" if on else "false")
+            st.sync()
+        except Exception:
+            logging.exception("window state save failed")
+
+    def _on_focus_changed(self, old, new):
+        """Highlight the card that contains the keyboard focus."""
+        for r in self.host_rows.values():
+            try:
+                r.set_current(new is not None and r.isAncestorOf(new))
+            except RuntimeError:
+                pass
+
     # --- UI only: keyboard/controller navigation -------------------------
     def _nav_grid(self):
-        grid = [self.toolbar_buttons] + [r.nav_buttons for r in self.host_rows.values()]
+        grid = [self.toolbar_buttons] + [r.nav_buttons for r in self.host_rows.values()] + [[self.log_btn]]
         return [row for row in grid if row]
 
     def _focus_first(self):
@@ -1348,7 +1663,7 @@ class MainWindow(QMainWindow):
     def _fit_min_size(self):
         avail = self._available()
         need = max([r.minimumSizeHint().width() for r in self.host_rows.values()] + [640])
-        lm = self.centralWidget().layout().contentsMargins() if self.centralWidget() else None
+        lm = self._body_layout.contentsMargins() if hasattr(self, "_body_layout") else None
         need += (lm.left() + lm.right() if lm else 20) + self.scroll.verticalScrollBar().sizeHint().width() + 6
         hm = self.host_layout.contentsMargins()
         need += hm.left() + hm.right() + 2 * self.scroll.frameWidth()
