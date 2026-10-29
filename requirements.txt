@@ -1,1 +1,4 @@
 PyQt6>=6.6
+# Optional: native gamepad support (works without Steam). The app runs fine without these.
+PySDL2>=0.9.16
+pysdl2-dll>=2.30; platform_machine == "x86_64" or platform_machine == "AMD64"

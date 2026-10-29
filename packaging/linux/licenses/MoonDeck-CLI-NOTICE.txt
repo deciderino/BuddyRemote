@@ -1,0 +1,11 @@
+Bundled third-party binary: moondeck-cli (file: moondeck-cli-linux.bin)
+Project:  MoonDeck by FrogTheFrog - https://github.com/FrogTheFrog/moondeck
+License:  GNU General Public License v3.0 (see MoonDeck-CLI-GPL-3.0.txt)
+Release:  "nightly" (published 2026-10-20T11:16:32Z)
+Source:   tag "nightly" -> commit 00f8c31a6d9324878811178a2f8a319e4ca5c7c2
+          https://github.com/FrogTheFrog/moondeck/tree/00f8c31a6d9324878811178a2f8a319e4ca5c7c2
+          (CLI source: defaults/python/cli.py + defaults/python/lib, built with Nuitka onefile
+           by .github/workflows/build.yaml; it in turn bundles Python and the packages in
+           defaults/python/requirements.txt under their own licenses)
+SHA-256:  6a7db3988ede1b3f3cc0d1d77e0d1dc29638aeba000c64d5ba376a58e01ea493
+The binary is redistributed unmodified.

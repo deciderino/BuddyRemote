@@ -5,3 +5,7 @@ __pycache__/
 *.log
 pair_debug.log
 buddyremote.log
+build/
+dist/
+AppDir/
+window.ini

@@ -31,22 +31,77 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QDialog, QFormLayout,
     QLineEdit, QCheckBox, QSpinBox, QMessageBox, QSystemTrayIcon, QMenu,
-    QTextEdit, QComboBox
+    QTextEdit, QComboBox, QAbstractButton, QStatusBar, QBoxLayout, QSizePolicy,
+    QAbstractSpinBox
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile, QUrl, QTranslator, QLibraryInfo
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices
+
+APP_VERSION = "1.2"
 
 # ---------------------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
+# Packaging: read-only resources (lang/, default config, bundled CLI) live next to
+# the code / inside the bundle; writable files go to a user dir when packaged.
+RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+PACKAGED = bool(getattr(sys, "frozen", False) or os.environ.get("APPIMAGE"))
+if PACKAGED:
+    APP_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "BuddyRemote"
 CONFIG_FILE = APP_DIR / "config.json"
 CLI_DIR = APP_DIR / "cli"
 CLI_BIN = CLI_DIR / "moondeck-cli"
 CLI_SCRIPT = CLI_DIR / "cli.py"  # fallback
-LANG_DIR = APP_DIR / "lang"
-LOCK_FILE = APP_DIR / ".lock"
+LANG_DIR = RES_DIR / "lang"
+INSTANCE_LOCK = APP_DIR / ".instance.lock"
 LOG_FILE = APP_DIR / "buddyremote.log"
+WINDOW_STATE_FILE = APP_DIR / "window.ini"  # UI only: size/maximized/position
 
 # ---------------------------------------------------------------------------
+def prepare_packaged_dir():
+    """Packaging only: create the user dir and seed it from the bundle on first start."""
+    if not PACKAGED:
+        return
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_FILE.exists() and (RES_DIR / "config.json").exists():
+        shutil.copyfile(RES_DIR / "config.json", CONFIG_FILE)
+    bundled_cli = RES_DIR / "bundled" / "moondeck-cli"
+    bundled_ver = RES_DIR / "bundled" / "moondeck-cli.version"
+    local_ver = CLI_DIR / "moondeck-cli.version"
+    # Copy the bundled CLI on first start, and again when a newer AppImage brings a
+    # different CLI build (its version file differs from the copied one).
+    outdated = (bundled_ver.exists() and
+                (not local_ver.exists() or local_ver.read_bytes() != bundled_ver.read_bytes()))
+    if bundled_cli.exists() and (not CLI_BIN.exists() or outdated):
+        CLI_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = CLI_BIN.with_suffix(".tmp")
+        shutil.copyfile(bundled_cli, tmp)
+        tmp.chmod(0o755)
+        tmp.replace(CLI_BIN)
+        if bundled_ver.exists():
+            shutil.copyfile(bundled_ver, local_ver)
+
+def bundled_cli_info() -> dict | None:
+    """Packaged mode: {'version', 'commit', 'sha256'} written by build-appimage.sh."""
+    for p in (RES_DIR / "bundled" / "moondeck-cli.version", CLI_DIR / "moondeck-cli.version"):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            continue
+    return None
+
+def bundled_cli_text() -> str:
+    info = bundled_cli_info() or {}
+    ver = str(info.get("version") or "").strip()
+    commit = str(info.get("commit") or "").strip()[:7]
+    if ver and commit:
+        return t("cli_bundled_full", version=ver, commit=commit)
+    if ver:
+        return t("cli_bundled_ver", version=ver)
+    return t("cli_bundled")
+
 def setup_logging(enabled: bool):
     handlers = [logging.FileHandler(LOG_FILE, encoding="utf-8")] if enabled else [logging.NullHandler()]
     logging.basicConfig(level=logging.DEBUG if enabled else logging.WARNING,
@@ -62,6 +117,42 @@ def load_lang(code="en") -> dict:
     except Exception:
         return {}
 
+LANGUAGES = ("de", "en")
+
+def system_language() -> str:
+    """'de' if the system locale is German, otherwise 'en'."""
+    try:
+        from PyQt6.QtCore import QLocale
+        return "de" if QLocale.system().name().lower().startswith("de") else "en"
+    except Exception:
+        return "en"
+
+def resolve_language(settings: dict) -> str:
+    """Language from settings.language: 'de', 'en' or 'auto' (system locale).
+    Before 1.2 the setting had no UI and every config said "en" without being used,
+    so an "en" that was never chosen in Options counts as 'auto'."""
+    code = (settings or {}).get("language", "auto")
+    if code == "en" and not (settings or {}).get("language_set"):
+        code = "auto"
+    return code if code in LANGUAGES else system_language()
+
+def set_language(code: str):
+    global L
+    L = load_lang(code)
+
+_qt_translator = None
+
+def install_qt_translations(qapp, code: str):
+    """Qt's own strings (Yes/No/Cancel in message boxes, context menus) in the UI
+    language; qtbase_*.qm ships with the PyQt6 wheel / bundle. English needs none."""
+    global _qt_translator
+    if code == "en" or _qt_translator is not None:
+        return
+    tr = QTranslator(qapp)
+    if tr.load(f"qtbase_{code}", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+        qapp.installTranslator(tr)
+        _qt_translator = tr
+
 L = load_lang()
 def t(key, **kw):
     s = L.get(key, key)
@@ -69,6 +160,181 @@ def t(key, **kw):
         return s.format(**kw) if kw else s
     except Exception:
         return s
+
+
+def touch_css(light: bool) -> str:
+    """UI only: larger touch/TV-friendly controls and a clearly visible focus ring.
+    The ring on buttons/checkboxes follows the navFocus property (set by InputModeController
+    only in keyboard/controller mode), so it hides while the mouse is used.
+    Appended after each theme stylesheet so it overrides sizes, not colors."""
+    acc = "#1565c0" if light else "#4fc3f7"
+    focus_bg = "#d6e6fa" if light else "#1d3b4f"
+    edit = "#e65100" if light else "#ffb74d"
+    edit_bg = "#fff3e0" if light else "#2b2620"
+    prim, prim_b, prim_h = ("#1565c0", "#0d47a1", "#1976d2") if light else ("#1f5f8b", "#2a7ab0", "#2670a3")
+    dis_bg, dis_fg, dis_b = ("#ececec", "#a6a6a6", "#dddddd") if light else ("#242424", "#5c5c5c", "#323232")
+    return f"""
+        QWidget {{ font-size: 15px; }}
+        QPushButton {{ min-height: 32px; min-width: 24px; padding: 6px 10px; border-width: 2px; border-radius: 6px; }}
+        QPushButton[navFocus="true"] {{ border: 2px solid {acc}; background: {focus_bg}; }}
+        QPushButton[touchRole="action"] {{ min-width: 56px; }}
+        QPushButton[touchRole="icon"] {{ min-width: 24px; padding: 6px 2px; }}
+        QPushButton[primary="true"] {{ background: {prim}; color: #ffffff; border: 2px solid {prim_b}; }}
+        QPushButton[primary="true"]:hover {{ background: {prim_h}; }}
+        QPushButton[primary="true"][navFocus="true"] {{ background: {prim_h}; border: 2px solid {acc}; }}
+        QMessageBox QPushButton, QDialog QPushButton {{ min-width: 80px; }}
+        QLineEdit, QSpinBox, QComboBox {{ min-height: 36px; padding: 4px 8px; border-width: 2px; border-radius: 4px; }}
+        QDialog QLineEdit {{ min-width: 260px; }}
+        QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: 2px solid {acc}; }}
+        QCheckBox {{ spacing: 12px; min-height: 34px; padding: 2px 6px; border: 2px solid transparent; border-radius: 6px; }}
+        QCheckBox[navFocus="true"] {{ border: 2px solid {acc}; background: {focus_bg}; }}
+        QCheckBox::indicator {{ width: 26px; height: 26px; }}
+        QLineEdit[editMode="true"], QSpinBox[editMode="true"], QComboBox[editMode="true"] {{ border: 2px solid {edit}; background: {edit_bg}; }}
+        QPushButton:disabled, QPushButton[primary="true"]:disabled {{ background: {dis_bg}; color: {dis_fg}; border: 2px solid {dis_b}; }}
+    """
+
+
+class _DialogNavFilter(QObject):
+    """UI only: controller-friendly focus handling inside dialogs.
+    Fields (line edits, spin boxes, combo boxes) have two states:
+      navigation = focused + highlighted; arrows move focus, Enter enters edit mode
+      edit mode  = amber border; keys edit the value; Enter accepts, Escape reverts.
+    Mouse click or typing a character enters edit mode immediately (desktop-first).
+    Enter on a field never triggers the dialog's default button."""
+    _ARROWS = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right)
+    _ENTER = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+    _MODS = (Qt.Key.Key_Shift, Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Meta,
+             Qt.Key.Key_AltGr, Qt.Key.Key_CapsLock, Qt.Key.Key_NumLock)
+
+    def __init__(self, dlg: QDialog):
+        super().__init__(dlg)
+        self.dlg = dlg
+        self.fields = set()
+        self.saved = {}
+        for w in dlg.findChildren(QWidget):
+            if isinstance(w, (QLineEdit, QSpinBox, QComboBox)) and not isinstance(w.parent(), (QSpinBox, QComboBox)):
+                self.fields.add(w)
+                w.setProperty("editMode", False)
+                w.installEventFilter(self)
+                if isinstance(w, QSpinBox):
+                    w.lineEdit().installEventFilter(self)  # mouse clicks land on the inner edit
+            elif isinstance(w, QAbstractButton):
+                w.installEventFilter(self)
+
+    @staticmethod
+    def _value(w):
+        if isinstance(w, QLineEdit):
+            return w.text()
+        if isinstance(w, QSpinBox):
+            return w.value()
+        return w.currentIndex()
+
+    @staticmethod
+    def _restore(w, v):
+        if isinstance(w, QLineEdit):
+            w.setText(v)
+        elif isinstance(w, QSpinBox):
+            w.setValue(v)
+        else:
+            w.setCurrentIndex(v)
+
+    def editing(self, w) -> bool:
+        return bool(w.property("editMode"))
+
+    def _set_edit(self, w, on: bool):
+        if self.editing(w) == on:
+            return
+        if on:
+            self.saved[w] = self._value(w)
+        w.setProperty("editMode", on)
+        w.style().unpolish(w)
+        w.style().polish(w)
+        w.update()
+
+    def _move(self, forward: bool):
+        self.dlg.focusNextPrevChild(forward)
+        fw = QApplication.focusWidget()
+        p = fw.parent() if fw else None
+        while p is not None and p is not self.dlg:
+            if isinstance(p, QScrollArea):
+                p.ensureWidgetVisible(fw)
+                break
+            p = p.parent()
+
+    def eventFilter(self, obj, ev):
+        et = ev.type()
+        field = obj if obj in self.fields else (obj.parent() if obj.parent() in self.fields else None)
+        if field is None:  # buttons / checkboxes: arrows move focus, Enter on a checkbox toggles it
+            if et == QEvent.Type.KeyPress and not ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+                if ev.key() in self._ARROWS:
+                    self._move(ev.key() in (Qt.Key.Key_Down, Qt.Key.Key_Right))
+                    return True
+                if ev.key() in self._ENTER and isinstance(obj, QCheckBox):
+                    obj.click()
+                    return True
+            return False
+        if et == QEvent.Type.MouseButtonPress and not isinstance(field, QComboBox):
+            self._set_edit(field, True)
+        elif et == QEvent.Type.FocusIn and obj is field:
+            if ev.reason() == Qt.FocusReason.MouseFocusReason and not isinstance(field, QComboBox):
+                self._set_edit(field, True)
+        elif et == QEvent.Type.FocusOut and obj is field:
+            if ev.reason() != Qt.FocusReason.PopupFocusReason:
+                self._set_edit(field, False)  # leaving a field keeps (accepts) its value
+        elif et == QEvent.Type.KeyPress and obj is field:
+            key = ev.key()
+            if self.editing(field):
+                if key in self._ENTER:
+                    self._set_edit(field, False)
+                    return True
+                if key == Qt.Key.Key_Escape:
+                    self._restore(field, self.saved.get(field, self._value(field)))
+                    self._set_edit(field, False)
+                    return True
+                return False
+            # navigation mode
+            if key in self._ARROWS and not ev.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+                self._move(key in (Qt.Key.Key_Down, Qt.Key.Key_Right))
+                return True
+            if key in self._ENTER:
+                self._set_edit(field, True)
+                le = field if isinstance(field, QLineEdit) else (field.lineEdit() if isinstance(field, QSpinBox) else None)
+                if le is not None:
+                    le.deselect()
+                    le.end(False)  # cursor at the end, ready to edit with arrows/keyboard
+                return True
+            if key in (Qt.Key.Key_Escape, Qt.Key.Key_Tab, Qt.Key.Key_Backtab) or key in self._MODS:
+                return False
+            self._set_edit(field, True)  # typing / Backspace / paste etc. edits right away
+            return False
+        return False
+
+
+def install_dialog_nav(dlg: QDialog):
+    dlg._nav_filter = _DialogNavFilter(dlg)
+
+
+def fit_dialog_to_screen(dlg: QDialog):
+    """UI only: if a dialog is taller than ~90% of the screen (e.g. Steam Deck at 150%),
+    move its contents into a scroll area so nothing ends up off-screen."""
+    scr = dlg.screen() or QApplication.primaryScreen()
+    if not scr or not dlg.layout():
+        return
+    max_h = int(scr.availableGeometry().height() * 0.9)
+    if dlg.sizeHint().height() <= max_h:
+        return
+    inner = QWidget()
+    inner.setLayout(dlg.layout())  # reparents the existing layout and its widgets
+    sa = QScrollArea()
+    sa.setWidgetResizable(True)
+    sa.setFrameShape(QFrame.Shape.NoFrame)
+    sa.setWidget(inner)
+    inner.setObjectName("fitInner")
+    sa.setStyleSheet("QScrollArea, QWidget#qt_scrollarea_viewport, QWidget#fitInner { background: transparent; }")
+    outer = QVBoxLayout(dlg)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.addWidget(sa)
+    dlg.resize(inner.sizeHint().width() + sa.verticalScrollBar().sizeHint().width() + 4, max_h)
 
 
 def dialog_stylesheet(parent=None) -> str:
@@ -87,7 +353,7 @@ def dialog_stylesheet(parent=None) -> str:
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #888; border-radius: 3px; background: #fff; }
             QCheckBox::indicator:checked { background: #4caf50; border-color: #388e3c; }
             QCheckBox::indicator:checked:hover { background: #66bb6a; }
-        """
+        """ + touch_css(True)
     else:
         return """
             QDialog, QMessageBox { background: #1e1e1e; color: #e0e0e0; }
@@ -99,7 +365,7 @@ def dialog_stylesheet(parent=None) -> str:
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #666; border-radius: 3px; background: #2a2a2a; }
             QCheckBox::indicator:checked { background: #4caf50; border-color: #388e3c; }
             QCheckBox::indicator:checked:hover { background: #66bb6a; }
-        """
+        """ + touch_css(False)
 
 
 # ---------------------------------------------------------------------------
@@ -110,10 +376,11 @@ DEFAULT_CONFIG = {
         "auto_status": True,
         "logging": False,
         "start_minimized": True,
-        "language": "en",
+        "language": "auto",
         "autostart": False,
         "confirm_actions": True,
         "tray_color_change": True,
+        "check_updates": True,
         "client_id": "",
         "theme": "Dark",
         "cli_verified": False,
@@ -173,6 +440,89 @@ def ping_host(ip: str, port: int = 59999, timeout=2.0) -> bool:
     except Exception:
         return False
 
+_ping_warned = False
+
+def ping_icmp(ip: str, timeout_s: int = 1) -> bool:
+    """One ICMP echo through the system ping binary (no raw sockets / root needed).
+    Windows: success only with 'TTL=' in the output ('Destination host unreachable'
+    replies also exit 0 there)."""
+    if not ip:
+        return False
+    win = sys.platform == "win32"
+    if win:
+        cmd = ["ping", "-n", "1", "-w", str(int(timeout_s * 1000)), ip]
+    elif sys.platform == "darwin":
+        cmd = ["ping", "-c", "1", "-t", str(max(1, int(timeout_s))), ip]
+    else:
+        cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout_s))), ip]
+    env = os.environ.copy()
+    if getattr(sys, "frozen", False):
+        # PyInstaller/AppImage: do not hand our bundled libs to a system binary
+        orig = env.get("LD_LIBRARY_PATH_ORIG")
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    kw = {"creationflags": 0x08000000} if win else {}   # CREATE_NO_WINDOW
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                           timeout=timeout_s + 4, env=env, **kw)
+    except OSError as e:
+        global _ping_warned
+        if not _ping_warned:
+            _ping_warned = True
+            logging.warning("ping not usable (%s): PC state comes from Buddy only", e)
+        return False
+    except subprocess.SubprocessError:
+        return False
+    if win:
+        return p.returncode == 0 and "TTL=" in (p.stdout or "").upper()
+    return p.returncode == 0
+
+def parse_steam_status(out: str) -> dict | None:
+    """'steam status --json' output -> {'running': bool, 'bpm': bool} or None."""
+    try:
+        data = json.loads(out[out.index("{"):out.rindex("}") + 1])
+    except ValueError:
+        return None
+    st = data.get("status", data) if isinstance(data, dict) else None
+    if not isinstance(st, dict) or "running" not in st:
+        return None
+    return {"running": bool(st.get("running")), "bpm": bool(st.get("bpm"))}
+
+# Update check: only reads the latest GitHub release; nothing is downloaded.
+RELEASES_API = "https://api.github.com/repos/deciderino/BuddyRemote/releases/latest"
+
+def version_tuple(v: str) -> tuple[int, ...]:
+    """'v1.2' / '1.10.0' / '1.3-beta' -> (1, 2) / (1, 10) / (1, 3); trailing zeros dropped."""
+    import re
+    m = re.match(r"\s*[vV]?\s*(\d+(?:\.\d+)*)", v or "")
+    if not m:
+        return ()
+    parts = [int(x) for x in m.group(1).split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+def is_newer_version(remote: str, local: str = APP_VERSION) -> bool:
+    r = version_tuple(remote)
+    return bool(r) and r > version_tuple(local)
+
+def fetch_latest_release(timeout: float = 5.0) -> dict:
+    """{'version', 'url', 'name'} of the latest release; raises on any problem."""
+    req = urllib.request.Request(RELEASES_API, headers={
+        "User-Agent": f"BuddyRemote/{APP_VERSION} (+https://github.com/deciderino/BuddyRemote)",
+        "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8", errors="replace"))
+    tag = str(data.get("tag_name") or "")
+    if not version_tuple(tag):
+        raise ValueError(f"no version in tag {tag!r}")
+    url = str(data.get("html_url") or "")
+    if not url.startswith("https://github.com/"):
+        url = "https://github.com/deciderino/BuddyRemote/releases/latest"
+    return {"version": tag.lstrip("vV").strip(), "url": url, "name": str(data.get("name") or tag)}
+
 def check_buddy_api(ip: str, port: int = 59999, timeout=5.0) -> tuple[bool, str]:
     """Direct HTTPS check to Buddy, ignoring self-signed cert. Returns (ok, message)."""
     import ssl
@@ -188,18 +538,68 @@ def check_buddy_api(ip: str, port: int = 59999, timeout=5.0) -> tuple[bool, str]
     except Exception as e:
         return False, str(e)
 
+# Single instance: a QLockFile in APP_DIR (Qt detects stale locks of dead processes
+# itself) plus a QLocalServer, through which a second start asks the running
+# instance to show its window. Only the process holding the lock ever releases it.
+_instance_lock: QLockFile | None = None
+_instance_server: QLocalServer | None = None
+
+def instance_server_name() -> str:
+    try:
+        user = os.getlogin()
+    except OSError:
+        user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
+    tag = hashlib.sha1(str(APP_DIR).encode()).hexdigest()[:8]
+    return f"BuddyRemote-{user}-{tag}"
+
 def acquire_lock() -> bool:
-    if LOCK_FILE.exists():
-        try:
-            os.kill(int(LOCK_FILE.read_text().strip()), 0)
-            return False
-        except (OSError, ValueError):
-            pass
-    LOCK_FILE.write_text(str(os.getpid()))
+    """True if this process is the only running instance (for this APP_DIR)."""
+    global _instance_lock
+    lock = QLockFile(str(INSTANCE_LOCK))
+    lock.setStaleLockTime(0)   # never treat a live instance's lock as stale by age
+    if lock.tryLock(200):
+        _instance_lock = lock
+        return True
+    return False
+
+def notify_running_instance() -> bool:
+    """Ask the already running instance to bring its window to the front."""
+    sock = QLocalSocket()
+    sock.connectToServer(instance_server_name())
+    if not sock.waitForConnected(1000):
+        return False
+    sock.write(b"show\n")
+    sock.flush()
+    sock.waitForBytesWritten(1000)
+    sock.disconnectFromServer()
+    return True
+
+def start_instance_server(on_show) -> bool:
+    """Primary instance: listen for 'show' requests from later starts."""
+    global _instance_server
+    name = instance_server_name()
+    QLocalServer.removeServer(name)   # leftover socket of a crashed run; we hold the lock
+    server = QLocalServer()
+    def _on_conn():
+        while server.hasPendingConnections():
+            c = server.nextPendingConnection()
+            c.readyRead.connect(lambda c=c: (c.readAll(), on_show()))
+            c.disconnected.connect(c.deleteLater)
+    server.newConnection.connect(_on_conn)
+    if not server.listen(name):
+        logging.warning("Single instance server failed: %s", server.errorString())
+        return False
+    _instance_server = server
     return True
 
 def release_lock():
-    LOCK_FILE.unlink(missing_ok=True)
+    global _instance_lock, _instance_server
+    if _instance_server is not None:
+        _instance_server.close()
+        _instance_server = None
+    if _instance_lock is not None:
+        _instance_lock.unlock()
+        _instance_lock = None
 
 def verify_existing_cli() -> tuple[bool, str]:
     """Re-check the already downloaded CLI against the current GitHub digest."""
@@ -313,7 +713,7 @@ def set_autostart(enabled: bool):
     d = Path.home() / ".config" / "autostart"
     d.mkdir(parents=True, exist_ok=True)
     f = d / "buddyremote.desktop"
-    launcher = APP_DIR / "BuddyRemote"
+    launcher = os.environ.get("APPIMAGE") or (sys.executable if getattr(sys, "frozen", False) else APP_DIR / "BuddyRemote")
     if enabled:
         f.write_text(f"""[Desktop Entry]
 Type=Application
@@ -330,68 +730,583 @@ StartupWMClass=BuddyRemote
 # ---------------------------------------------------------------------------
 class Signals(QObject):
     status_update = pyqtSignal(str, str)  # host_id, status_text
-    action_done = pyqtSignal(str, bool, str)  # title, success, message
+    host_status = pyqtSignal(str, dict)   # host_id, result of MainWindow._check_host
+    update_result = pyqtSignal(dict)      # result of MainWindow.check_for_updates
+    action_started = pyqtSignal(str, str, str)  # host_id, name, action
+    action_done = pyqtSignal(str, str, str, bool, str)  # host_id, name, action, success, message
 
 # ---------------------------------------------------------------------------
+# UI only: colours for the main window (cards, status dots, toasts, status bar)
+def ui_colors(light: bool) -> dict:
+    if light:
+        return dict(card="#ffffff", card_b="#dcdcdc", cur="#eaf2fc", cur_b="#1565c0", name="#222222",
+                    pill="#e8e8e8", pill_t="#555555", sub="#666666", err="#c62828",
+                    online="#43a047", offline="#9e9e9e", busy="#ffb300", error="#e53935", unknown="#c8c8c8",
+                    bar="#ececec", bar_b="#d0d0d0", bar_t="#555555", tb_b="#d8d8d8",
+                    ok_bg="#e8f5e9", ok_b="#43a047", ok_t="#1b5e20",
+                    er_bg="#ffebee", er_b="#e53935", er_t="#b71c1c",
+                    in_bg="#fff8e1", in_b="#ffb300", in_t="#5d4037", dim="#666666")
+    return dict(card="#262626", card_b="#303030", cur="#24313a", cur_b="#4fc3f7", name="#ffffff",
+                pill="#333333", pill_t="#bbbbbb", sub="#9a9a9a", err="#ef9a9a",
+                online="#43a047", offline="#757575", busy="#ffb300", error="#e53935", unknown="#4a4a4a",
+                bar="#252525", bar_b="#333333", bar_t="#aaaaaa", tb_b="#2e2e2e",
+                ok_bg="#2e3b2f", ok_b="#43a047", ok_t="#e6e6e6",
+                er_bg="#3b2a2a", er_b="#e53935", er_t="#e6e6e6",
+                in_bg="#3a3424", in_b="#ffb300", in_t="#e6e6e6", dim="#a8a8a8")
+
+
+class _ResizeWatcher(QObject):
+    """UI only: calls back when a widget is resized (used for responsive host cards)."""
+    def __init__(self, target, callback):
+        super().__init__(target)
+        self._cb = callback
+        target.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.Resize:
+            self._cb()
+        return False
+
+
+# Actions: power actions go through MainWindow._run_action ("host <action>"),
+# Steam actions through MainWindow._run_cli_for_host.
+STEAM_ACTIONS = {
+    "steam_launch": ["steam", "launch"],
+    "steam_close": ["steam", "close", "client"],
+}
+CONFIRM_ACTIONS = ("shutdown", "restart", "suspend", "hibernate", "steam_close")
+
 class HostRow(QFrame):
+    """One host as a card (UI only; every button calls the same handlers as before):
+      line 1: status dot, name, IP pill ............ ↑ ↓ ✎   ✕
+      line 2: chips PC / Buddy / Steam, "checked HH:MM:SS" (+ optional red hint)
+      line 3: POWER [Wake|Shut down|Restart|Standby|Hibernate]   STEAM [Start/Close]
+    All buttons are always visible; the ones that make no sense for the last status
+    check are disabled (not focusable, tooltip says why). Narrow windows stack the
+    groups (label above its buttons) and split the chips into two rows (set_compact)."""
+    POWER = ("wake", "shutdown", "restart", "suspend", "hibernate")
+    ICON = 48           # ↑ ↓ ✎ ✕ are ICON x ICON px (touch target)
+    GROUP_GAP = 18
+
     def __init__(self, host: dict, parent_app):
         super().__init__()
         self.host = host
         self.app = parent_app
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("hostCard")
+        self.setProperty("current", False)
+        self.state = "unknown"      # online / offline / unknown: PC state of the last check
+        self.busy = False           # an action is running for this host
+        self.failed = False         # the last action failed
+        self.result = None          # last status check (dict, see MainWindow._check_host)
+        self.checking = False       # first check still pending ("checking…")
+        self.steam_running = None   # True / False / None (unknown)
+        self._compact = False
+        self.nav_buttons = []       # arrow-key/controller order: power, steam, ↑ ↓ ✎ ✕
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 10, 10, 12)
+        root.setSpacing(6)
+        self._root = root
 
-        info = QVBoxLayout()
+        # --- line 1 ----------------------------------------------------------
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self._top = top
+        self.dot = QLabel()
+        self.dot.setFixedSize(14, 14)
+        top.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
         self.name_lbl = QLabel(host.get("name", "Unnamed"))
+        self.name_lbl.setObjectName("hostName")
+        self.name_lbl.setWordWrap(True)
+        nf = self.name_lbl.font()
+        nf.setBold(True)
+        nf.setPixelSize(16)
+        self.name_lbl.setMinimumWidth(min(QFontMetrics(nf).horizontalAdvance(self.name_lbl.text()) + 6, 220))
         self.ip_lbl = QLabel(host.get("ip", ""))
-        self.status_lbl = QLabel(t("unknown"))
-        self._apply_row_theme()
-        info.addWidget(self.name_lbl)
-        info.addWidget(self.ip_lbl)
-        info.addWidget(self.status_lbl)
-        layout.addLayout(info, 1)
-
-        # Action buttons
-        for act, label in [("wake", t("wake")), ("shutdown", t("shutdown")),
-                           ("restart", t("restart")), ("suspend", t("suspend"))]:
-            btn = QPushButton(label)
-            btn.setFixedWidth(80)
-            btn.clicked.connect(lambda _, a=act: self.app.do_action(self.host, a))
-            layout.addWidget(btn)
-
-        # Controls
-        for text, slot in [("↑", lambda: self.app.move_host(self.host, -1)),
-                           ("↓", lambda: self.app.move_host(self.host, 1)),
-                           ("✎", lambda: self.app.edit_host(self.host)),
-                           ("✕", lambda: self.app.remove_host(self.host))]:
+        self.ip_lbl.setObjectName("ipPill")
+        top.addWidget(self.name_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(self.ip_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        top.addStretch(1)
+        self.mgmt_buttons = []
+        for text, tip, slot in [("↑", "tip_up", lambda: self.app.move_host(self.host, -1)),
+                                ("↓", "tip_down", lambda: self.app.move_host(self.host, 1)),
+                                ("✎", "tip_edit", lambda: self.app.edit_host(self.host)),
+                                ("✕", "tip_remove", lambda: self.app.remove_host(self.host))]:
             b = QPushButton(text)
-            b.setFixedWidth(28)
+            b.setProperty("touchRole", "icon")
+            b.setProperty("mgmt", True)
+            b.setFixedSize(self.ICON, self.ICON)
+            b.setToolTip(t(tip))
+            b.setProperty("navKey", tip)
             b.clicked.connect(slot)
-            layout.addWidget(b)
+            b.installEventFilter(self.app)
+            if text == "✕":
+                top.addSpacing(14)      # remove is kept apart from the harmless buttons
+            top.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.mgmt_buttons.append(b)
+        root.addLayout(top)
+        indent = self.dot.width() + top.spacing()
+        self._indent = indent
+
+        # --- line 2: chips -----------------------------------------------------
+        self.chips = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.chips.setContentsMargins(indent, 0, 0, 0)
+        self.chips.setSpacing(6)
+        ra, rb = QHBoxLayout(), QHBoxLayout()
+        ra.setSpacing(6)
+        rb.setSpacing(6)
+        self._chip_rows = (ra, rb)
+        self.chip_pc, self.chip_buddy, self.chip_steam = (QLabel() for _ in range(3))
+        for ch in (self.chip_pc, self.chip_buddy, self.chip_steam):
+            ch.setObjectName("chip")
+            ch.setTextFormat(Qt.TextFormat.RichText)
+            ch.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        ra.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        rb.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        ra.addWidget(self.chip_pc)
+        ra.addWidget(self.chip_buddy)
+        rb.addWidget(self.chip_steam)
+        self.time_lbl = QLabel()
+        self.time_lbl.setObjectName("hostSub")
+        rb.addSpacing(4)
+        rb.addWidget(self.time_lbl)
+        rb.addStretch(1)
+        self.chips.addLayout(ra)
+        self.chips.addLayout(rb)
+        self.chips.addStretch(1)
+        root.addLayout(self.chips)
+        self.hint_lbl = QLabel("⚠ " + t("hint_no_buddy"))
+        self.hint_lbl.setObjectName("hostError")
+        self.hint_lbl.setWordWrap(True)
+        self.hint_lbl.setContentsMargins(indent, 0, 0, 0)
+        self.hint_lbl.hide()
+        root.addWidget(self.hint_lbl)
+        self.error_lbl = QLabel()
+        self.error_lbl.setObjectName("hostError")
+        self.error_lbl.setWordWrap(True)
+        self.error_lbl.setContentsMargins(indent, 0, 0, 0)
+        self.error_lbl.hide()
+        root.addWidget(self.error_lbl)
+
+        # --- line 3: action groups ----------------------------------------------
+        self.groups = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.groups.setContentsMargins(indent, 2, 0, 0)
+        self.groups.setSpacing(self.GROUP_GAP)
+        self.action_buttons = {}
+        self._gboxes = []
+        power = []
+        for act in self.POWER:
+            btn = QPushButton(t(act))
+            if act == "wake":
+                btn.setProperty("primary", True)
+            btn.clicked.connect(lambda _, a=act: self.app.do_action(self.host, a))
+            power.append(btn)
+            self.action_buttons[act] = btn
+        self.steam_btn = QPushButton(t("steam_launch"))
+        self.steam_btn.clicked.connect(lambda: self.app.do_action(
+            self.host, "steam_close" if self.steam_running else "steam_launch"))
+        self.action_buttons["steam"] = self.steam_btn
+        for act, b in self.action_buttons.items():
+            b.setProperty("navKey", act)
+        for b in power + [self.steam_btn]:
+            b.setProperty("touchRole", "action")
+            b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)  # never squeezed
+            b.installEventFilter(self.app)
+            self.nav_buttons.append(b)
+        self.groups.addWidget(self._group(t("grp_power"), power), 0, Qt.AlignmentFlag.AlignLeft)
+        self.groups.addWidget(self._group(t("grp_steam"), [self.steam_btn]), 0, Qt.AlignmentFlag.AlignLeft)
+        self.groups.addStretch(1)
+        root.addLayout(self.groups)
+        self.nav_buttons += self.mgmt_buttons
+
+        self._apply_row_theme()
+        cached = self.app.host_state.get(host.get("id")) if hasattr(self.app, "host_state") else None
+        if cached:
+            self.result = cached
+        else:
+            self.checking = self.app.cfg.get("settings", {}).get("auto_status", True)
+        self._render()
+
+    def _group(self, title: str, buttons: list) -> QWidget:
+        w = QWidget()
+        box = QBoxLayout(QBoxLayout.Direction.LeftToRight, w)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        lbl = QLabel(title)
+        lbl.setObjectName("grpLbl")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        box.addWidget(lbl)
+        h = QHBoxLayout()
+        h.setSpacing(6)
+        for b in buttons:
+            h.addWidget(b)
+        box.addLayout(h)
+        self._gboxes.append((box, lbl, buttons))
+        return w
+
+    # --- responsive layout ----------------------------------------------------------
+    def _lock_widths(self):
+        """Buttons never get narrower than their text; the Steam toggle is as wide as
+        its longer label, so it does not jump when the label changes."""
+        self.ensurePolished()
+        for b in self.nav_buttons:
+            b.ensurePolished()
+        sb = self.steam_btn
+        fm = sb.fontMetrics()
+        extra = sb.sizeHint().width() - fm.horizontalAdvance(sb.text())
+        sb.setMinimumWidth(max(fm.horizontalAdvance(t("steam_launch")), fm.horizontalAdvance(t("steam_close"))) + extra)
+        for b in self.nav_buttons[:len(self.POWER)]:
+            b.setMinimumWidth(b.sizeHint().width())
+        lw = max(lbl.sizeHint().width() for _, lbl, _ in self._gboxes)
+        self._lbl_w = lw
+        if not self._compact:
+            for _, lbl, _ in self._gboxes:
+                lbl.setFixedWidth(lw)
+
+    @staticmethod
+    def _bw(b) -> int:
+        return max(b.minimumWidth(), b.sizeHint().width())
+
+    def _line1_width(self) -> int:
+        t1 = self._top
+        icons = len(self.mgmt_buttons) * self.ICON + (len(self.mgmt_buttons) - 1) * t1.spacing() + 14
+        return (self.dot.width() + t1.spacing() + self.name_lbl.minimumWidth() + t1.spacing()
+                + self.ip_lbl.sizeHint().width() + t1.spacing() + icons)
+
+    def _chips_widths(self) -> tuple[int, int]:
+        a = self.chip_pc.sizeHint().width() + 6 + self.chip_buddy.sizeHint().width()
+        b = self.chip_steam.sizeHint().width() + 6 + 4 + max(self.time_lbl.sizeHint().width(), 120)
+        return a, b
+
+    def _group_widths(self) -> list[int]:
+        return [sum(self._bw(b) for b in btns) + 6 * (len(btns) - 1) for _, _, btns in self._gboxes]
+
+    def wide_width(self) -> int:
+        """Width needed for the one-line-per-section layout."""
+        self._lock_widths()
+        m = self._root.contentsMargins()
+        ca, cb = self._chips_widths()
+        groups = sum(self._lbl_w + 8 + g for g in self._group_widths()) + self.GROUP_GAP * (len(self._gboxes) - 1)
+        return m.left() + m.right() + max(self._line1_width(), self._indent + ca + 6 + cb, self._indent + groups)
+
+    def compact_width(self) -> int:
+        """Smallest sensible width: groups stacked, chips in two rows, nothing cut off."""
+        self._lock_widths()
+        m = self._root.contentsMargins()
+        ca, cb = self._chips_widths()
+        return m.left() + m.right() + max(self._line1_width(), self._indent + max(ca, cb),
+                                          self._indent + max(self._group_widths() + [self._lbl_w]))
+
+    def compact_height(self) -> int:
+        m = self._root.contentsMargins()
+        sp = self._root.spacing()
+        bh = self.steam_btn.sizeHint().height()
+        lh = max(lbl.sizeHint().height() for _, lbl, _ in self._gboxes)
+        chip_h = self.chip_pc.sizeHint().height()
+        groups = len(self._gboxes) * (lh + 3 + bh) + 6 * (len(self._gboxes) - 1) + 2
+        return m.top() + m.bottom() + self.ICON + sp + 2 * chip_h + 4 + sp + groups
+
+    def set_compact(self, on: bool):
+        if on == self._compact:
+            return
+        self._compact = on
+        d = QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight
+        self.groups.setDirection(d)
+        self.groups.setSpacing(6 if on else self.GROUP_GAP)
+        self.chips.setDirection(d)
+        self.chips.setSpacing(4 if on else 6)
+        lw = getattr(self, "_lbl_w", 62)
+        for box, lbl, _ in self._gboxes:      # compact: small label above its buttons
+            box.setDirection(d)
+            box.setSpacing(3 if on else 8)
+            lbl.setMinimumWidth(0 if on else lw)
+            lbl.setMaximumWidth(16777215 if on else lw)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft if on else (Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
+
+    # --- theme / state -------------------------------------------------------------
+    def _light(self) -> bool:
+        return self.app.cfg.get("settings", {}).get("theme", "Dark") == "Light"
 
     def _apply_row_theme(self):
-        light = self.app.cfg.get("settings", {}).get("theme", "Dark") == "Light"
-        if light:
-            self.setStyleSheet("background: #ffffff; border: 1px solid #ddd; border-radius: 6px;")
-            self.name_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #222; background: transparent;")
-            self.ip_lbl.setStyleSheet("color: #555; background: transparent;")
-            self.status_lbl.setStyleSheet("color: #666; background: transparent;")
-        else:
-            self.setStyleSheet("background: #252525; border-radius: 6px;")
-            self.name_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #fff; background: transparent;")
-            self.ip_lbl.setStyleSheet("color: #aaa; background: transparent;")
-            self.status_lbl.setStyleSheet("color: #888; background: transparent;")
+        c = ui_colors(self._light())
+        self.setStyleSheet(f"""
+            QFrame#hostCard {{ background: {c['card']}; border: 1px solid {c['card_b']}; border-radius: 8px; }}
+            QFrame#hostCard[current="true"] {{ background: {c['cur']}; border: 1px solid {c['cur_b']}; }}
+            QFrame#hostCard QLabel {{ background: transparent; border: none; }}
+            QFrame#hostCard QLabel#hostName {{ font-weight: bold; font-size: 16px; color: {c['name']}; }}
+            QFrame#hostCard QLabel#ipPill {{ font-size: 12px; color: {c['pill_t']}; background: {c['pill']}; border-radius: 9px; padding: 1px 8px; }}
+            QFrame#hostCard QLabel#hostSub {{ font-size: 13px; color: {c['sub']}; }}
+            QFrame#hostCard QLabel#hostError {{ font-size: 13px; color: {c['err']}; }}
+            QFrame#hostCard QLabel#chip {{ font-size: 13px; color: {c['pill_t']}; background: {c['pill']}; border-radius: 10px; padding: 2px 10px; }}
+            QFrame#hostCard QLabel#grpLbl {{ font-size: 11px; font-weight: bold; color: {c['sub']}; letter-spacing: 1px; padding-left: 2px; }}
+            QFrame#hostCard QPushButton[mgmt="true"] {{ font-size: 17px; padding: 0px; min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; }}
+        """)
+        self._render()
 
-    def set_status(self, text: str):
-        self.status_lbl.setText(text)
-        color = "#888"
-        if text == t("online"):
-            color = "#2e7d32" if self.app.cfg.get("settings", {}).get("theme") == "Light" else "#4caf50"
-        elif text == t("offline"):
-            color = "#c62828" if self.app.cfg.get("settings", {}).get("theme") == "Light" else "#f44336"
-        self.status_lbl.setStyleSheet(f"color: {color};")
+    def _auto(self) -> bool:
+        return self.app.cfg.get("settings", {}).get("auto_status", True)
+
+    def _chip(self, label: QLabel, col: str, text: str):
+        label.setText(f'<span style="color:{col}">●</span>&nbsp;{text}')
+
+    def _render(self):
+        """Paint dot, chips, hint and button states from the current UI state."""
+        if not hasattr(self, "steam_btn"):
+            return
+        c = ui_colors(self._light())
+        grey = "#b0b0b0" if self._light() else "#8a8a8a"
+        r = self.result
+        pc_on = buddy = False
+        steam = None
+        if r:
+            buddy = bool(r.get("buddy"))
+            pc_on = bool(r.get("ping")) or buddy
+            steam = r.get("steam") if buddy else None
+        # chips
+        if r:
+            if pc_on:
+                self._chip(self.chip_pc, c["online"], t("chip_pc_online") if buddy else t("chip_pc_ping"))
+            else:
+                self._chip(self.chip_pc, c["offline"], t("chip_pc_offline"))
+            if buddy:
+                self._chip(self.chip_buddy, c["online"], t("chip_buddy_ok"))
+            else:
+                self._chip(self.chip_buddy, c["error"] if pc_on else c["offline"], t("chip_buddy_fail"))
+            if steam and steam.get("running"):
+                self._chip(self.chip_steam, c["online"], t("chip_steam_bpm") if steam.get("bpm") else t("chip_steam_running"))
+            elif steam is not None:
+                self._chip(self.chip_steam, c["offline"], t("chip_steam_off"))
+            else:
+                self._chip(self.chip_steam, grey, t("chip_steam_unknown"))
+        else:
+            key = "checking" if self.checking else "unknown"
+            self._chip(self.chip_pc, grey, t(f"chip_pc_{key}"))
+            self._chip(self.chip_buddy, grey, t(f"chip_buddy_{key}"))
+            self._chip(self.chip_steam, grey, t("chip_steam_unknown"))
+        self.steam_running = (bool(steam.get("running")) if steam is not None else None)
+        self.state = ("online" if pc_on else "offline") if r else "unknown"
+        # dot
+        if self.busy:
+            col = c["cur_b"]          # accent blue: action running
+        elif self.failed:
+            col = c["error"]
+        elif pc_on and buddy:
+            col = c["online"]
+        elif pc_on:
+            col = c["busy"]          # amber: PC up, Buddy not answering
+        elif r:
+            col = c["offline"]
+        else:
+            col = c["unknown"]
+        self.dot.setStyleSheet(f"background: {col}; border-radius: 7px; border: none;")
+        # time / busy line
+        parts = []
+        if self.busy:
+            parts.append("⟳ " + t("working"))
+        elif r and r.get("time"):
+            parts.append(t("checked_at", time=r["time"]))
+        if not self.host.get("mac"):
+            parts.append(t("no_mac_short"))
+        self.time_lbl.setText(" · ".join(parts))
+        self.hint_lbl.setVisible(bool(r) and pc_on and not buddy)
+        # Steam toggle label
+        closing = bool(self.steam_running)
+        self.steam_btn.setText(t("steam_close") if closing else t("steam_launch"))
+        self._steam_tip = t("tip_steam_close") if closing else t("tip_steam_launch")
+        self._apply_enabled(r, pc_on, buddy)
+
+    def _apply_enabled(self, r, pc_on: bool, buddy: bool):
+        """Variant A: everything visible; inapplicable actions disabled + not focusable.
+        Without a result (first check pending, or automatic checks off) all stay enabled."""
+        gate = bool(r) and self._auto()
+        want = {}
+        for act, b in self.action_buttons.items():
+            tip = self._steam_tip if act == "steam" else t(f"tip_{act}")
+            if not gate:
+                ok, why = True, ""
+            elif act == "wake":
+                ok, why = not pc_on, t("why_pc_on")
+            else:
+                ok, why = buddy, t("why_no_buddy")
+            want[b] = ok
+            b.setToolTip(tip if ok else f"{tip}\n{why}")
+        for b, ok in want.items():        # enable first, so focus can move onto them
+            if ok:
+                b.setEnabled(True)
+                b.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        fw = self.window().focusWidget()
+        if fw in want and not want[fw]:
+            # move the focus to the nearest button that stays usable before disabling
+            idx = self.nav_buttons.index(fw)
+            usable = [b for b in self.nav_buttons if want.get(b, True)]
+            if usable:
+                tgt = min(usable, key=lambda b: abs(self.nav_buttons.index(b) - idx))
+                tgt.setFocus(Qt.FocusReason.TabFocusReason)
+        for b, ok in want.items():
+            if not ok:
+                b.setEnabled(False)
+                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def set_result(self, result: dict):
+        self.result = result
+        self.checking = False
+        self.failed = False
+        self.error_lbl.hide()
+        self._render()
+        self.app._update_counts()
+
+    def set_busy(self, on: bool):
+        self.busy = on
+        if on:
+            self.failed = False
+            self.error_lbl.hide()
+        self._render()
+
+    def set_failed(self, text: str):
+        self.busy = False
+        self.failed = True
+        self.error_lbl.setText("⚠ " + text)
+        self.error_lbl.setToolTip(text)
+        self.error_lbl.show()
+        self._render()
+
+    def set_current(self, on: bool):
+        if bool(self.property("current")) == on:
+            return
+        self.setProperty("current", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+
+class Toast(QFrame):
+    """UI only: non-blocking feedback in the main window (bottom right), fades out
+    automatically; click to dismiss. kind: ok (green), error (red), info (amber)."""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("toast")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(2)
+        self.title = QLabel()
+        self.title.setWordWrap(True)
+        self.title.setObjectName("toastTitle")
+        self.detail = QLabel()
+        self.detail.setWordWrap(True)
+        self.detail.setObjectName("toastDetail")
+        lay.addWidget(self.title)
+        lay.addWidget(self.detail)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.hide)
+        self.hide()
+
+    def show_message(self, title: str, detail: str, kind: str, light: bool, ms: int):
+        c = ui_colors(light)
+        bg, b, fg = {"ok": ("ok_bg", "ok_b", "ok_t"), "error": ("er_bg", "er_b", "er_t"),
+                     "info": ("in_bg", "in_b", "in_t")}[kind]
+        icon = {"ok": "✓", "error": "⚠", "info": "ℹ"}[kind]
+        self.setStyleSheet(f"""
+            QFrame#toast {{ background: {c[bg]}; border: 1px solid {c[b]}; border-radius: 8px; }}
+            QFrame#toast QLabel {{ background: transparent; border: none; color: {c[fg]}; }}
+            QLabel#toastTitle {{ font-size: 14px; font-weight: bold; }}
+            QLabel#toastDetail {{ font-size: 13px; color: {c['dim']}; }}
+        """)
+        self.title.setText(f"{icon}  {title}")
+        self.detail.setText(detail)
+        self.detail.setVisible(bool(detail))
+        self.place()
+        self.show()
+        self.raise_()
+        self.timer.start(ms)
+
+    def place(self):
+        par = self.parentWidget()
+        if not par:
+            return
+        w = min(380, max(220, par.width() - 28))
+        self.setFixedWidth(w)
+        self.adjustSize()
+        bottom = getattr(par.window(), "_toast_bottom", lambda: par.height() - 14)()
+        self.move(par.width() - w - 14, bottom - self.height())
+
+    def mousePressEvent(self, ev):
+        self.hide()
+
+class UpdateToast(QFrame):
+    """Blue info toast (bottom right) for a new release: [Download] opens the
+    release page in the browser, ✕ closes. Stays about 30 s."""
+    def __init__(self, parent, on_download):
+        super().__init__(parent)
+        self.setObjectName("utoast")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 10, 10, 10)
+        lay.setSpacing(10)
+        txt = QVBoxLayout()
+        txt.setSpacing(2)
+        self.title = QLabel()
+        self.title.setObjectName("toastTitle")
+        self.title.setWordWrap(True)
+        self.detail = QLabel()
+        self.detail.setObjectName("toastDetail")
+        self.detail.setWordWrap(True)
+        txt.addWidget(self.title)
+        txt.addWidget(self.detail)
+        lay.addLayout(txt, 1)
+        self.dl_btn = QPushButton(t("update_download"))
+        self.dl_btn.setObjectName("toastBtn")
+        self.dl_btn.clicked.connect(on_download)
+        self.x_btn = QPushButton("✕")
+        self.x_btn.setObjectName("toastX")
+        self.x_btn.setToolTip(t("close"))
+        self.x_btn.setFixedSize(48, 48)
+        self.x_btn.clicked.connect(self.hide)
+        lay.addWidget(self.dl_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self.x_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.buttons = [self.dl_btn, self.x_btn]
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.hide)
+        self.hide()
+
+    def show_update(self, version: str, light: bool, ms: int = 30000):
+        if light:
+            bg, b, fg, dim, btn, btn_b = "#e3f2fd", "#1565c0", "#0d47a1", "#37474f", "#1565c0", "#0d47a1"
+        else:
+            bg, b, fg, dim, btn, btn_b = "#1b2d3a", "#4fc3f7", "#e6e6e6", "#a8c4d4", "#1f5f8b", "#2a7ab0"
+        self.setStyleSheet(f"""
+            QFrame#utoast {{ background: {bg}; border: 1px solid {b}; border-radius: 8px; }}
+            QFrame#utoast QLabel {{ background: transparent; border: none; color: {fg}; }}
+            QLabel#toastTitle {{ font-size: 14px; font-weight: bold; }}
+            QLabel#toastDetail {{ font-size: 13px; color: {dim}; }}
+            QPushButton#toastBtn {{ background: {btn}; color: #fff; border: 2px solid {btn_b}; min-width: 80px; }}
+            QPushButton#toastBtn:focus {{ border: 2px solid #ffffff; }}
+            QPushButton#toastX {{ background: transparent; color: {dim}; border: 2px solid transparent; min-width: 0px; min-height: 0px; padding: 0px; font-size: 16px; }}
+            QPushButton#toastX:focus {{ border: 2px solid {b}; }}
+        """)
+        self.title.setText("ℹ  " + t("update_available", version=version))
+        self.detail.setText(t("update_detail", current=APP_VERSION))
+        self.place()
+        self.show()
+        self.raise_()
+        self.timer.start(ms)
+
+    def place(self):
+        par = self.parentWidget()
+        if not par:
+            return
+        w = min(460, max(260, par.width() - 28))
+        self.setFixedWidth(w)
+        self.adjustSize()
+        bottom = getattr(par.window(), "_toast_base_bottom", lambda: par.height() - 14)()
+        self.move(par.width() - w - 14, bottom - self.height())
+
+    def hideEvent(self, ev):
+        super().hideEvent(ev)
+        win = self.window()
+        if hasattr(win, "toast") and win.toast.isVisible():
+            win.toast.place()          # the normal toast moves back down
 
 # ---------------------------------------------------------------------------
 class HostDialog(QDialog):
@@ -401,16 +1316,27 @@ class HostDialog(QDialog):
         self.setStyleSheet(dialog_stylesheet(parent))
         self.host = host
         layout = QFormLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
 
         self.name_edit = QLineEdit(host.get("name", "") if host else "")
         self.ip_edit = QLineEdit(host.get("ip", "") if host else "")
         self.mac_edit = QLineEdit(host.get("mac") or "" if host else "")
         self.port_edit = QLineEdit(str(host.get("buddy_port", 59999)) if host else "59999")
+        self.port_edit.setValidator(QIntValidator(1, 65535, self.port_edit))
+        self.port_edit.setPlaceholderText("59999")
+        self.port_error = QLabel(t("port_invalid"))
+        light = bool(parent and hasattr(parent, "cfg") and parent.cfg.get("settings", {}).get("theme", "Dark") == "Light")
+        self.port_error.setStyleSheet(f"color: {ui_colors(light)['err']};")
+        self.port_error.setWordWrap(True)
+        self.port_error.setVisible(False)
+        self.port_edit.textChanged.connect(lambda _: self.port_error.setVisible(False))
 
         layout.addRow(t("name"), self.name_edit)
         layout.addRow(t("ip"), self.ip_edit)
         layout.addRow(t("mac"), self.mac_edit)
         layout.addRow(t("buddy_port"), self.port_edit)
+        layout.addRow("", self.port_error)
 
         btns = QHBoxLayout()
         save_btn = QPushButton(t("save"))
@@ -420,6 +1346,27 @@ class HostDialog(QDialog):
         btns.addWidget(save_btn)
         btns.addWidget(cancel_btn)
         layout.addRow(btns)
+        install_dialog_nav(self)
+        fit_dialog_to_screen(self)
+
+    def _port(self) -> int | None:
+        """Buddy port from the field: empty = default 59999, None = invalid."""
+        txt = self.port_edit.text().strip()
+        if not txt:
+            return 59999
+        try:
+            port = int(txt)
+        except ValueError:
+            return None
+        return port if 1 <= port <= 65535 else None
+
+    def accept(self):
+        if self._port() is None:
+            self.port_error.setVisible(True)
+            self.port_edit.setFocus()
+            self.port_edit.selectAll()
+            return
+        super().accept()
 
     def get_data(self) -> dict | None:
         ip = self.ip_edit.text().strip()
@@ -430,7 +1377,7 @@ class HostDialog(QDialog):
             "name": self.name_edit.text().strip() or ip,
             "ip": ip,
             "mac": self.mac_edit.text().strip() or None,
-            "buddy_port": int(self.port_edit.text() or 59999)
+            "buddy_port": self._port() or 59999
         }
 
 # ---------------------------------------------------------------------------
@@ -440,6 +1387,8 @@ class OptionsDialog(QDialog):
         self.setWindowTitle(t("options"))
         self.setStyleSheet(dialog_stylesheet(parent))
         layout = QFormLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
 
         self.interval = QSpinBox()
         self.interval.setRange(10, 300)
@@ -470,15 +1419,69 @@ class OptionsDialog(QDialog):
         self.tray_color.setChecked(settings.get("tray_color_change", True))
         layout.addRow(self.tray_color)
 
+        self.check_updates = QCheckBox(t("check_updates"))
+        self.check_updates.setChecked(settings.get("check_updates", True))
+        layout.addRow(self.check_updates)
+
         self.theme = QComboBox()
         self.theme.addItems(["Dark", "Light"])
         self.theme.setCurrentText(settings.get("theme", "Dark"))
-        layout.addRow("Theme", self.theme)
+        layout.addRow(t("theme"), self.theme)
 
-        about_btn = QPushButton("About")
+        self.language = QComboBox()
+        for code, key in (("auto", "lang_auto"), ("de", "lang_de"), ("en", "lang_en")):
+            self.language.addItem(t(key), code)
+        cur = settings.get("language", "auto")
+        if cur == "en" and not settings.get("language_set"):
+            cur = "auto"
+        self.language.setCurrentIndex(max(0, self.language.findData(cur)))
+        layout.addRow(t("language"), self.language)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        light = settings.get("theme", "Dark") == "Light"
+        cc = ui_colors(light)
+        sep.setStyleSheet(f"color: {cc['card_b']}; background: {cc['card_b']}; max-height: 1px; border: none;")
+        layout.addRow(sep)
+        layout.addRow(t("app_version"), QLabel(APP_VERSION))
+        self.update_lbl = QLabel(parent.update_status_text() if parent and hasattr(parent, "update_status_text") else "")
+        self.update_lbl.setStyleSheet(f"color: {cc['sub']}; font-size: 13px;")
+        self.update_lbl.setWordWrap(True)
+        layout.addRow(t("updates_row"), self.update_lbl)
+
+        about_btn = QPushButton(t("about"))
         about_btn.clicked.connect(lambda: parent.show_about() if parent else None)
-        layout.addRow(about_btn)
+        self.update_btn = QPushButton(t("check_updates_now"))
+        self.update_btn.clicked.connect(lambda: parent.check_for_updates(manual=True) if parent else None)
+        row = QHBoxLayout()
+        row.addWidget(self.update_btn)
+        row.addWidget(about_btn)
+        row.addStretch(1)
+        layout.addRow(row)
 
+        self.verify_label = None
+        if PACKAGED:
+            # The AppImage ships a pinned CLI (checksum checked at build time):
+            # no download / verify UI, just what is bundled.
+            cli_lbl = QLabel(bundled_cli_text())
+            cli_lbl.setWordWrap(True)
+            layout.addRow("MoonDeck CLI:", cli_lbl)
+        else:
+            self._add_cli_verify_rows(layout, settings)
+
+        btns = QHBoxLayout()
+        save = QPushButton(t("save"))
+        save.clicked.connect(self.accept)
+        cancel = QPushButton(t("cancel"))
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(save)
+        btns.addWidget(cancel)
+        layout.addRow(btns)
+        install_dialog_nav(self)
+        fit_dialog_to_screen(self)
+
+    def _add_cli_verify_rows(self, layout, settings):
+        """Source mode (unchanged): checksum state of the downloaded CLI + re-verify."""
         # CLI verification status
         verified = settings.get("cli_verified", False)
         vhash = settings.get("cli_hash", "")
@@ -496,15 +1499,6 @@ class OptionsDialog(QDialog):
         verify_btn.clicked.connect(self._do_verify)
         layout.addRow(verify_btn)
 
-        btns = QHBoxLayout()
-        save = QPushButton(t("save"))
-        save.clicked.connect(self.accept)
-        cancel = QPushButton(t("cancel"))
-        cancel.clicked.connect(self.reject)
-        btns.addWidget(save)
-        btns.addWidget(cancel)
-        layout.addRow(btns)
-
     def _do_verify(self):
         ok, msg = verify_existing_cli()
         if ok:
@@ -519,11 +1513,11 @@ class OptionsDialog(QDialog):
                 text += f"\n{vtime}"
             self.verify_label.setText(text)
             self.verify_label.setStyleSheet("color: #4caf50;")
-            QMessageBox.information(self, "BuddyRemote", "Checksum verified.")
+            notify(self.parent(), t("checksum_verified"), kind="ok")  # UI: toast instead of popup
         else:
             self.verify_label.setText(msg)
             self.verify_label.setStyleSheet("color: #f44336;")
-            QMessageBox.warning(self, "BuddyRemote", f"Verification failed:\n{msg}")
+            notify(self.parent(), t("verify_failed"), msg, kind="error")  # UI: toast instead of popup
 
     def get_settings(self) -> dict:
         return {
@@ -534,20 +1528,465 @@ class OptionsDialog(QDialog):
             "autostart": self.autostart.isChecked(),
             "confirm_actions": self.confirm.isChecked(),
             "tray_color_change": self.tray_color.isChecked(),
-            "theme": self.theme.currentText()
+            "check_updates": self.check_updates.isChecked(),
+            "theme": self.theme.currentText(),
+            "language": self.language.currentData(),
+            "language_set": True,
         }
 
 # ---------------------------------------------------------------------------
+# UI only: destructive confirmations default to "No" (controller/Enter safety)
+_YES_NO = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+_NO = QMessageBox.StandardButton.No
+
+_NAV_KEYS = (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
+
+
+def notify(win, title: str, detail: str = "", kind: str = "ok"):
+    """UI only: non-blocking feedback (toast in the main window) instead of an info popup."""
+    if win is not None and hasattr(win, "show_toast"):
+        win.show_toast(title, detail, kind)
+
+
+# ---------------------------------------------------------------------------
+# UI only: input modes and native gamepad input.
+# Nothing here calls app logic directly: the gamepad is translated into the same
+# arrow/Enter/Escape key events that keyboard users already send, so the existing
+# navigation, edit mode, dialogs and confirmations handle it unchanged.
+_FIELD_TYPES = (QLineEdit, QAbstractSpinBox, QComboBox)
+_PAD_KEYS = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right,
+             Qt.Key.Key_Return, Qt.Key.Key_Escape)
+_REVEAL_KEYS = _PAD_KEYS + (Qt.Key.Key_Enter, Qt.Key.Key_Tab, Qt.Key.Key_Backtab, Qt.Key.Key_Space)
+_MOUSE_MOVE_PX = 4
+
+
+class InputModeController(QObject):
+    """UI only: shows the focus ring in keyboard/controller mode, hides it in mouse mode.
+
+    - Mouse click / wheel / movement hides the ring (focus itself is kept).
+    - Keyboard arrows, Tab, Enter, Space or any gamepad input show it again. If the ring was
+      hidden (or nothing navigable has focus), that first press only reveals the ring and is
+      swallowed, so it never moves or activates anything by surprise. Escape always passes.
+    - Text fields (line edits, spin boxes, combos) keep their normal always-visible focus.
+    """
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.nav_visible = True
+        self.pad = None                # GamepadBridge, set by the bridge
+        self._last_main = None         # logical last focus in the main window (rows get rebuilt)
+        self._last_real = {}           # key -> time a real key press passed through (dedup)
+        self._last_pos = QCursor.pos()
+        app = QApplication.instance()
+        app.installEventFilter(self)
+        app.focusChanged.connect(self._focus_changed)
+
+    # --- focus ring ------------------------------------------------------
+    @staticmethod
+    def _set_ring(w, on: bool):
+        if not isinstance(w, (QPushButton, QCheckBox)):
+            return
+        try:
+            if bool(w.property("navFocus")) == on:
+                return
+            w.setProperty("navFocus", on)
+            w.style().unpolish(w)
+            w.style().polish(w)
+            w.update()
+        except RuntimeError:
+            pass
+
+    def _focus_changed(self, old, new):
+        self._set_ring(old, False)
+        self._set_ring(new, self.nav_visible)
+        self._remember(new)
+
+    def set_nav_visible(self, on: bool):
+        if self.nav_visible == on:
+            return
+        self.nav_visible = on
+        if on:
+            self._last_pos = QCursor.pos()
+        fw = QApplication.focusWidget()
+        self._set_ring(fw, on)
+        self.win._on_focus_changed(None, fw)
+
+    # --- where the ring comes back --------------------------------------
+    def _remember(self, w):
+        if w is None:
+            return
+        try:
+            win = self.win
+            if w in win.toolbar_buttons:
+                self._last_main = ("toolbar", None, win.toolbar_buttons.index(w))
+            elif w is win.log_btn:
+                self._last_main = ("log", None, 0)
+            else:
+                for hid, row in win.host_rows.items():
+                    if w in row.nav_buttons:
+                        self._last_main = ("host", hid, row.nav_buttons.index(w))
+                        break
+        except (RuntimeError, AttributeError):
+            pass
+
+    def _main_target(self):
+        win = self.win
+        kind, hid, idx = self._last_main or (None, None, 0)
+        try:
+            if kind == "toolbar":
+                return win.toolbar_buttons[idx]
+            if kind == "log":
+                return win.log_btn
+            if kind == "host" and hid in win.host_rows:
+                btns = win.host_rows[hid].nav_buttons
+                usable = [b for b in btns if win._navigable(b)]
+                if btns[idx] in usable:
+                    return btns[idx]
+                if usable:   # remembered button got disabled: nearest usable one
+                    return min(usable, key=lambda b: abs(btns.index(b) - idx))
+        except (IndexError, RuntimeError):
+            pass
+        for r in win.host_rows.values():
+            for b in r.nav_buttons:
+                if win._navigable(b):
+                    return b
+        return win.toolbar_buttons[0]
+
+    @staticmethod
+    def _focusable(w, win):
+        try:
+            return (w is not None and w.window() is win and w.isVisible() and w.isEnabled()
+                    and bool(w.focusPolicy() & Qt.FocusPolicy.TabFocus))
+        except RuntimeError:
+            return False
+
+    def _valid(self, fw, aw) -> bool:
+        if fw is None or aw is None:
+            return False
+        try:
+            if fw.window() is not aw or not fw.isVisible() or not fw.isEnabled():
+                return False
+            if aw is self.win:
+                return any(fw in row for row in self.win._nav_grid())
+            return self._focusable(fw, aw) or isinstance(fw.parentWidget(), _FIELD_TYPES)
+        except RuntimeError:
+            return False
+
+    def _dialog_target(self, aw):
+        if isinstance(aw, QMessageBox) and aw.defaultButton() is not None:
+            return aw.defaultButton()      # confirmations: the safe default ("No")
+        if self._valid(aw.focusWidget(), aw):
+            return aw.focusWidget()
+        w = aw.nextInFocusChain()
+        for _ in range(500):
+            if w is None or w is aw:
+                break
+            if self._focusable(w, aw):
+                return w
+            w = w.nextInFocusChain()
+        return None
+
+    def _ensure_focus(self, aw):
+        target = self._main_target() if aw is self.win else self._dialog_target(aw)
+        if target is not None:
+            target.setFocus(Qt.FocusReason.TabFocusReason)
+            if aw is self.win:
+                self.win.scroll.ensureWidgetVisible(target)
+
+    # --- shared by keyboard and gamepad ---------------------------------
+    def handle_input(self, key) -> bool:
+        """Switch to keyboard/controller mode. Returns True if the press only revealed the
+        ring and must not be processed further."""
+        aw = QApplication.activeWindow()
+        if aw is None or QApplication.activePopupWidget() is not None:
+            return False
+        fw = QApplication.focusWidget()
+        valid = self._valid(fw, aw)
+        was_hidden = not self.nav_visible
+        self.set_nav_visible(True)
+        if key == Qt.Key.Key_Escape:
+            if not valid:
+                self._ensure_focus(aw)
+            return False
+        if valid and (not was_hidden or isinstance(fw, _FIELD_TYPES)
+                      or isinstance(fw.parentWidget(), _FIELD_TYPES)):
+            return False
+        self._ensure_focus(aw)
+        return True
+
+    def last_real_key(self, key) -> float:
+        return self._last_real.get(key, -1e9)
+
+    def eventFilter(self, obj, ev):
+        et = ev.type()
+        if et == QEvent.Type.KeyPress:
+            # only real (spontaneous) presses, once, at their first receiver
+            if not ev.spontaneous() or obj is not (QApplication.focusWidget() or QApplication.activeWindow()):
+                return False
+            key = ev.key()
+            if key == Qt.Key.Key_Enter:
+                key = Qt.Key.Key_Return
+            mods = ev.modifiers() & ~(Qt.KeyboardModifier.KeypadModifier | Qt.KeyboardModifier.ShiftModifier)
+            if key not in _REVEAL_KEYS or mods != Qt.KeyboardModifier.NoModifier:
+                return False
+            if key in _PAD_KEYS and self.pad is not None and self.pad.is_duplicate(key):
+                return True            # same press already arrived natively from the gamepad
+            if key in _PAD_KEYS:
+                self._last_real[key] = time.monotonic()
+            return self.handle_input(key)
+        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick, QEvent.Type.Wheel):
+            if ev.spontaneous() and self.nav_visible:
+                self.set_nav_visible(False)
+        elif et in (QEvent.Type.MouseMove, QEvent.Type.HoverMove) and self.nav_visible:
+            pos = QCursor.pos()
+            if (pos - self._last_pos).manhattanLength() >= _MOUSE_MOVE_PX:
+                self.set_nav_visible(False)
+        return False
+
+
+class GamepadSource:
+    """Abstract gamepad event source. poll() returns a list of normalized events:
+    ("added", dev, name) / ("removed", dev) / ("button", dev, name, down) / ("axis", dev, name, value)
+    with button names a, b, up, down, left, right and axis names lx, ly (value -1.0 .. 1.0)."""
+
+    def open(self) -> str:
+        """Returns "" on success or a reason why gamepads are unavailable."""
+        return ""
+
+    def poll(self) -> list:
+        return []
+
+    def close(self):
+        pass
+
+
+class SDLGamepadSource(GamepadSource):
+    """Reads controllers with SDL2's GameController API (Xbox-style layout for Xbox,
+    PlayStation, Switch Pro, 8BitDo, Steam Deck, ...). Works with or without Steam."""
+
+    def __init__(self):
+        self.sdl = None
+        self.pads = {}
+
+    def open(self) -> str:
+        bundled = RES_DIR / "libsdl2"  # packaging: libSDL2 shipped inside the bundle
+        if bundled.is_dir() and not os.environ.get("PYSDL2_DLL_PATH"):
+            os.environ["PYSDL2_DLL_PATH"] = str(bundled)
+        try:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                import sdl2
+        except Exception as e:
+            return f"SDL2 not available ({e.__class__.__name__}: {e})"
+        h = sdl2.SDL_SetHint
+        h(sdl2.SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, b"1")  # we check the active window ourselves
+        h(sdl2.SDL_HINT_NO_SIGNAL_HANDLERS, b"1")                # leave Ctrl+C / SIGTERM to Python/Qt
+        h(sdl2.SDL_HINT_JOYSTICK_HIDAPI, b"0")                   # read-only: never reconfigure devices
+        if sdl2.SDL_Init(sdl2.SDL_INIT_GAMECONTROLLER) != 0:
+            return "SDL_Init failed: " + (sdl2.SDL_GetError() or b"").decode(errors="replace")
+        self.sdl = sdl2
+        B = sdl2
+        self._buttons = {B.SDL_CONTROLLER_BUTTON_A: "a", B.SDL_CONTROLLER_BUTTON_B: "b",
+                         B.SDL_CONTROLLER_BUTTON_DPAD_UP: "up", B.SDL_CONTROLLER_BUTTON_DPAD_DOWN: "down",
+                         B.SDL_CONTROLLER_BUTTON_DPAD_LEFT: "left", B.SDL_CONTROLLER_BUTTON_DPAD_RIGHT: "right"}
+        self._axes = {B.SDL_CONTROLLER_AXIS_LEFTX: "lx", B.SDL_CONTROLLER_AXIS_LEFTY: "ly"}
+        return ""
+
+    def poll(self) -> list:
+        sdl2 = self.sdl
+        if sdl2 is None:
+            return []
+        out = []
+        ev = sdl2.SDL_Event()
+        while sdl2.SDL_PollEvent(ctypes.byref(ev)):
+            t = ev.type
+            if t == sdl2.SDL_CONTROLLERDEVICEADDED:
+                c = sdl2.SDL_GameControllerOpen(ev.cdevice.which)
+                if c:
+                    iid = sdl2.SDL_JoystickInstanceID(sdl2.SDL_GameControllerGetJoystick(c))
+                    if iid in self.pads:
+                        sdl2.SDL_GameControllerClose(c)
+                    else:
+                        self.pads[iid] = c
+                        name = (sdl2.SDL_GameControllerName(c) or b"?").decode(errors="replace")
+                        out.append(("added", iid, name))
+            elif t == sdl2.SDL_CONTROLLERDEVICEREMOVED:
+                c = self.pads.pop(ev.cdevice.which, None)
+                if c:
+                    sdl2.SDL_GameControllerClose(c)
+                    out.append(("removed", ev.cdevice.which))
+            elif t in (sdl2.SDL_CONTROLLERBUTTONDOWN, sdl2.SDL_CONTROLLERBUTTONUP):
+                name = self._buttons.get(ev.cbutton.button)
+                if name:
+                    out.append(("button", ev.cbutton.which, name, t == sdl2.SDL_CONTROLLERBUTTONDOWN))
+            elif t == sdl2.SDL_CONTROLLERAXISMOTION:
+                name = self._axes.get(ev.caxis.axis)
+                if name:
+                    out.append(("axis", ev.caxis.which, name, max(-1.0, ev.caxis.value / 32767.0)))
+        return out
+
+    def close(self):
+        if self.sdl is not None:
+            for c in self.pads.values():
+                self.sdl.SDL_GameControllerClose(c)
+            self.pads.clear()
+            self.sdl.SDL_Quit()
+            self.sdl = None
+
+
+class GamepadBridge(QObject):
+    """UI only: turns gamepad input into the key events the app already understands.
+    D-pad / left stick -> arrow keys (with repeat), A -> Enter, B -> Escape.
+    Only acts while one of our windows is the active window."""
+    TICK_MS, IDLE_MS = 16, 200
+    PRESS, RELEASE = 0.5, 0.35          # stick deadzone with hysteresis
+    DELAY, REPEAT = 0.35, 0.12          # auto-repeat for held directions
+    DEDUPE = 0.08                       # Steam Input double-input window (seconds)
+    KEYS = {"up": Qt.Key.Key_Up, "down": Qt.Key.Key_Down, "left": Qt.Key.Key_Left,
+            "right": Qt.Key.Key_Right, "a": Qt.Key.Key_Return, "b": Qt.Key.Key_Escape}
+    REPEATING = ("up", "down", "left", "right")
+
+    def __init__(self, controller, source=None, clock=time.monotonic):
+        super().__init__(controller)
+        self.ctl = controller
+        controller.pad = self
+        self.src = source
+        self.clock = clock
+        self.devices = {}
+        self.pressed = {}               # (dev, button) -> bool
+        self.sticks = {}                # dev -> {"lx": v, "ly": v, "dir": name|None}
+        self.held = {}                  # name -> {"next": t, "repeat": bool, "native": bool}
+        self.last_sent = {}             # key -> time we injected it
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.tick)
+
+    def start(self) -> bool:
+        if self.src is None:
+            self.src = SDLGamepadSource()
+        try:
+            err = self.src.open()
+        except Exception as e:
+            err = f"{e.__class__.__name__}: {e}"
+        if err:
+            logging.info("Gamepad support disabled: %s", err)
+            self.src = None
+            return False
+        self.timer.start(self.IDLE_MS)
+        QApplication.instance().aboutToQuit.connect(self.stop)
+        return True
+
+    def stop(self):
+        self.timer.stop()
+        if self.src is not None:
+            self.src.close()
+            self.src = None
+
+    # Steam Input dedup: a real key press equal to a gamepad press we just injected
+    def is_duplicate(self, key) -> bool:
+        if not self.devices:
+            return False
+        for name, h in self.held.items():
+            if self.KEYS[name] == key and h["native"]:
+                return True
+        return self.clock() - self.last_sent.get(key, -1e9) < self.DEDUPE
+
+    def _stick_dir(self, st):
+        x, y, cur = st.get("lx", 0.0), st.get("ly", 0.0), st.get("dir")
+        comp = {"left": -x, "right": x, "up": -y, "down": y}
+        if cur is not None and comp[cur] >= self.RELEASE:
+            return cur
+        best = max(comp, key=comp.get)
+        return best if comp[best] >= self.PRESS else None
+
+    def _active_names(self):
+        names = {n for (dev, n), down in self.pressed.items() if down}
+        for st in self.sticks.values():
+            if st.get("dir"):
+                names.add(st["dir"])
+        return names
+
+    def tick(self):
+        if self.src is None:
+            return
+        try:
+            events = self.src.poll()
+        except Exception:
+            logging.exception("gamepad poll failed; gamepad disabled")
+            self.stop()
+            return
+        for e in events:
+            kind, dev = e[0], e[1]
+            if kind == "added":
+                self.devices[dev] = e[2]
+                logging.info("Gamepad connected: %s", e[2])
+            elif kind == "removed":
+                self.devices.pop(dev, None)
+                self.sticks.pop(dev, None)
+                for k in [k for k in self.pressed if k[0] == dev]:
+                    del self.pressed[k]
+                logging.info("Gamepad disconnected")
+            elif kind == "button":
+                self.pressed[(dev, e[2])] = e[3]
+                if e[3]:
+                    self._edge(e[2])    # every physical press counts, even if already held elsewhere
+            elif kind == "axis":
+                st = self.sticks.setdefault(dev, {})
+                st[e[2]] = e[3]
+                st["dir"] = self._stick_dir(st)
+        now = self.clock()
+        active = self._active_names()
+        for name in list(self.held):
+            if name not in active:
+                del self.held[name]
+        for name in active:
+            if name not in self.held:
+                self._edge(name)
+            h = self.held.get(name)
+            if h and h["repeat"] and now >= h["next"]:
+                h["next"] = now + self.REPEAT
+                if self._inject(name) != "sent":
+                    h["repeat"] = False
+        want = self.TICK_MS if (self.devices and QApplication.activeWindow() is not None) else self.IDLE_MS
+        if self.timer.interval() != want:
+            self.timer.setInterval(want)
+
+    def _edge(self, name):
+        if name in self.held and name in self.REPEATING:
+            return
+        res = self._inject(name)
+        self.held[name] = {"next": self.clock() + self.DELAY,
+                           "repeat": res == "sent" and name in self.REPEATING,
+                           "native": res in ("sent", "reveal")}
+
+    def _inject(self, name) -> str:
+        """Returns "inactive", "shadow" (Steam already sent it as a key), "reveal" or "sent"."""
+        if QApplication.activeWindow() is None:
+            return "inactive"
+        key = self.KEYS[name]
+        now = self.clock()
+        if now - self.ctl.last_real_key(key) < self.DEDUPE:
+            return "shadow"
+        self.last_sent[key] = now
+        if self.ctl.handle_input(key):
+            return "reveal"
+        target = QApplication.activePopupWidget() or QApplication.focusWidget() or QApplication.activeWindow()
+        QApplication.postEvent(target, QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
+        QApplication.postEvent(target, QKeyEvent(QEvent.Type.KeyRelease, key, Qt.KeyboardModifier.NoModifier))
+        return "sent"
+
+
 class MainWindow(QMainWindow):
     def show_about(self):
         box = QMessageBox(self)
         box.setStyleSheet(dialog_stylesheet(self))
-        box.setWindowTitle("About BuddyRemote")
+        box.setWindowTitle(t("about_title"))
         box.setTextFormat(Qt.TextFormat.RichText)
         box.setText(
-            "BuddyRemote v1.0<br><br>"
+            f"BuddyRemote v{APP_VERSION}<br><br>"
             "by Diciderino<br><br>"
-            "Thanks to the MoonDeck project:<br>"
+            + t("about_thanks") + "<br>"
             '<a href="https://github.com/FrogTheFrog/moondeck">https://github.com/FrogTheFrog/moondeck</a>'
         )
         box.exec()
@@ -558,74 +1997,153 @@ class MainWindow(QMainWindow):
         setup_logging(self.cfg["settings"].get("logging", False))
         self.signals = Signals()
         self.signals.status_update.connect(self.on_status_update)
+        self.signals.host_status.connect(self.on_host_status)
+        self.signals.update_result.connect(self.on_update_result)
+        self._pending_update: dict | None = None   # found while the window was hidden
+        self._update_running = False
+        self._options_dlg = None
+        self._checking: set[str] = set()      # host ids with a check in flight
+        self._checking_lock = threading.Lock()
+        self.signals.action_started.connect(self.on_action_started)
         self.signals.action_done.connect(self.on_action_done)
         self.action_locks: dict[str, threading.Lock] = {}
         self.host_rows: dict[str, HostRow] = {}
+        self.host_state: dict[str, dict] = {}   # last status check per host id (survives refresh_hosts)
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.check_status)
 
         self.setWindowTitle(t("app_title"))
-        self.resize(780, 520)
-        self.setMinimumSize(640, 420)
         self.apply_theme()
 
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
         # Toolbar
-        tb = QHBoxLayout()
-        for text, slot in [(t("add_host"), self.add_host), (t("options"), self.open_options),
-                           (t("refresh"), self.check_status)]:
+        self.toolbar = QWidget()
+        self.toolbar.setObjectName("toolbar")
+        tb = QHBoxLayout(self.toolbar)
+        tb.setContentsMargins(12, 8, 12, 8)
+        tb.setSpacing(8)
+        self.toolbar_buttons = []  # UI only: arrow-key navigation
+        for text, tip, slot in [("＋  " + t("add_host"), "tip_add", self.add_host),
+                                ("⟳  " + t("refresh"), "tip_refresh", self.check_status),
+                                ("⚙  " + t("options"), "tip_options", self.open_options)]:
             b = QPushButton(text)
+            b.setToolTip(t(tip))
             b.clicked.connect(slot)
+            b.installEventFilter(self)
+            self.toolbar_buttons.append(b)
             tb.addWidget(b)
         tb.addStretch()
-        main_layout.addLayout(tb)
+        main_layout.addWidget(self.toolbar)
+
+        body = QWidget()
+        self._body_layout = QVBoxLayout(body)
+        self._body_layout.setContentsMargins(12, 10, 12, 6)
+        self._body_layout.setSpacing(6)
+        main_layout.addWidget(body, 1)
 
         # Scroll area for hosts
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.host_widget = QWidget()
+        self.host_widget.setObjectName("hostArea")
         self.host_layout = QVBoxLayout(self.host_widget)
+        self.host_layout.setContentsMargins(0, 0, 0, 0)
         self.host_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.host_layout.setSpacing(8)
         scroll.setWidget(self.host_widget)
-        main_layout.addWidget(scroll)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # rows wrap instead
+        self._body_layout.addWidget(scroll, 1)
         self.scroll = scroll
+        self._vp_watch = _ResizeWatcher(scroll.viewport(), self._relayout_rows)
         self._apply_host_area_theme()
 
-        self.status_bar = QLabel("")
-        self.status_bar.setStyleSheet("color: #888; padding: 4px;")
-        main_layout.addWidget(self.status_bar)
+        # Collapsible log (UI only; same log content as before)
+        self.log_btn = QPushButton()
+        self.log_btn.setObjectName("logToggle")
+        self.log_btn.setToolTip(t("tip_log"))
+        self.log_btn.clicked.connect(self.toggle_log)
+        self.log_btn.installEventFilter(self)
+        log_row = QHBoxLayout()
+        log_row.addWidget(self.log_btn)
+        log_row.addStretch()
+        self._body_layout.addLayout(log_row)
 
         # Output log (read-only)
         self.output = QTextEdit()
         self.output.setReadOnly(True)
-        self.output.setMaximumHeight(120)
+        self.output.setMaximumHeight(150)
         self._apply_output_theme()
-        main_layout.addWidget(self.output)
+        self._body_layout.addWidget(self.output)
+
+        # Status bar: last message (left), counts / auto refresh / CLI (right)
+        self.status_bar = QLabel("")
+        self.count_lbl = QLabel("")
+        self.refresh_lbl = QLabel("")
+        self.cli_lbl = QLabel("")
+        sb = QStatusBar()
+        sb.setSizeGripEnabled(False)
+        # UI only: a long message must never push the right-hand labels out of the window
+        self.status_bar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        sb.addWidget(self.status_bar, 1)
+        for w in (self.count_lbl, self.refresh_lbl, self.cli_lbl):
+            sb.addPermanentWidget(w)
+        self.setStatusBar(sb)
+        self._apply_chrome_theme()
+
+        # Toast overlay (UI only)
+        self.toast = Toast(central)
+        self.update_toast = UpdateToast(central, self._open_update_page)
+        for b in self.update_toast.buttons:
+            b.installEventFilter(self)
+
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        self._set_log_visible(str(st.value("log_visible", "false")).lower() == "true")
+
+        # UI only: keyboard shortcuts for existing toolbar actions
+        for seq, slot in [("F5", self.check_status), ("Ctrl+N", self.add_host),
+                          ("Ctrl+,", self.open_options), ("Ctrl+L", self.toggle_log)]:
+            QShortcut(QKeySequence(seq), self, activated=slot)
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
+        # UI only: focus ring mouse/keyboard modes + native gamepad input (SDL2, optional)
+        self.input_mode = InputModeController(self)
+        self.gamepad = GamepadBridge(self.input_mode)
+        QTimer.singleShot(0, self.gamepad.start)
 
         self.refresh_hosts()
+        self._update_status_bar()
 
         # Tray icon
         self.tray = QSystemTrayIcon(self)
         self._update_tray_icon(False)
         self.tray.setToolTip("BuddyRemote")
         menu = QMenu()
-        menu.addAction("Show", self.show_normal)
+        menu.addAction(t("tray_show"), self.show_normal)
         menu.addSeparator()
-        self.host_menu = menu.addMenu("Hosts")
+        self.host_menu = menu.addMenu(t("tray_hosts"))
         menu.addSeparator()
-        menu.addAction("Quit", self.quit_app)
+        menu.addAction(t("tray_quit"), self.quit_app)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self.tray_activated)
         self.tray.show()
         self._update_tray_menu()
 
+        # UI only: window size/state memory and screen fitting
+        self._was_shown = False
+        self._restore_window_state()
+        QApplication.instance().aboutToQuit.connect(self._save_window_state)
+
         if self.cfg["settings"].get("auto_status", True):
             interval = self.cfg["settings"].get("status_interval", 30) * 1000
             self.status_timer.start(interval)
             QTimer.singleShot(1000, self.check_status)
+
+        if self.cfg["settings"].get("check_updates", True):
+            QTimer.singleShot(4000, self.check_for_updates)
 
         if self.cfg["settings"].get("start_minimized", True):
             QTimer.singleShot(100, self.hide)
@@ -647,7 +2165,7 @@ class MainWindow(QMainWindow):
             QPushButton { background: #2d2d2d; color: #e0e0e0; border: 1px solid #444; padding: 4px 8px; border-radius: 3px; }
             QPushButton:hover { background: #3d3d3d; }
             QLineEdit, QSpinBox { background: #2a2a2a; color: #e0e0e0; border: 1px solid #444; padding: 3px; }
-        """)
+        """ + touch_css(False))
 
     def apply_light(self):
         pal = self.palette()
@@ -662,18 +2180,28 @@ class MainWindow(QMainWindow):
             QPushButton { background: #e0e0e0; color: #222; border: 1px solid #ccc; padding: 4px 8px; border-radius: 3px; }
             QPushButton:hover { background: #d0d0d0; }
             QLineEdit, QSpinBox { background: #ffffff; color: #222; border: 1px solid #ccc; padding: 3px; }
-        """)
+        """ + touch_css(True))
 
     def _apply_host_area_theme(self):
         if not hasattr(self, "host_widget"):
             return
         light = self.cfg.get("settings", {}).get("theme", "Dark") == "Light"
         if light:
-            self.host_widget.setStyleSheet("background: #f5f5f5;")
-            self.scroll.setStyleSheet("QScrollArea { border: none; background: #f5f5f5; }")
+            self.host_widget.setStyleSheet("QWidget#hostArea { background: #f5f5f5; }")
+            self.scroll.setStyleSheet("QScrollArea { border: none; background: #f5f5f5; }"
+                "QScrollBar:vertical { background: transparent; width: 10px; margin: 2px 0 2px 0; }"
+                "QScrollBar::handle:vertical { background: #c4c4c4; border-radius: 4px; min-height: 32px; margin: 0 2px; }"
+                "QScrollBar::handle:vertical:hover { background: #a8a8a8; }"
+                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }")
         else:
-            self.host_widget.setStyleSheet("background: #1e1e1e;")
-            self.scroll.setStyleSheet("QScrollArea { border: none; background: #1e1e1e; }")
+            self.host_widget.setStyleSheet("QWidget#hostArea { background: #1e1e1e; }")
+            self.scroll.setStyleSheet("QScrollArea { border: none; background: #1e1e1e; }"
+                "QScrollBar:vertical { background: transparent; width: 10px; margin: 2px 0 2px 0; }"
+                "QScrollBar::handle:vertical { background: #4a4a4a; border-radius: 4px; min-height: 32px; margin: 0 2px; }"
+                "QScrollBar::handle:vertical:hover { background: #5e5e5e; }"
+                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }")
 
     def _apply_output_theme(self):
         if not hasattr(self, "output"):
@@ -684,6 +2212,25 @@ class MainWindow(QMainWindow):
         else:
             self.output.setStyleSheet("QTextEdit { background: #1a1a1a; color: #ccc; border: 1px solid #333; font-family: monospace; }")
 
+    def _light(self) -> bool:
+        return self.cfg.get("settings", {}).get("theme", "Dark") == "Light"
+
+    def _apply_chrome_theme(self):
+        """UI only: toolbar, log toggle and status bar colours."""
+        if not hasattr(self, "toolbar"):
+            return
+        c = ui_colors(self._light())
+        self.toolbar.setStyleSheet(f"QWidget#toolbar {{ border-bottom: 1px solid {c['tb_b']}; }}")
+        self.log_btn.setStyleSheet(
+            f"QPushButton#logToggle {{ background: transparent; border: 2px solid transparent; color: {c['bar_t']};"
+            f" text-align: left; padding: 4px 8px; min-height: 26px; font-size: 13px; }}"
+            f" QPushButton#logToggle:hover {{ color: {c['name']}; }}"
+            f" QPushButton#logToggle[navFocus=\"true\"] {{ border: 2px solid {c['cur_b']}; }}")
+        self.statusBar().setStyleSheet(
+            f"QStatusBar {{ background: {c['bar']}; border-top: 1px solid {c['bar_b']}; }}"
+            f" QStatusBar::item {{ border: none; }}"
+            f" QStatusBar QLabel {{ color: {c['bar_t']}; font-size: 13px; padding: 3px 8px; }}")
+
     def apply_theme(self):
         theme = self.cfg["settings"].get("theme", "Dark")
         if theme == "Light":
@@ -692,6 +2239,7 @@ class MainWindow(QMainWindow):
             self.apply_dark()
         self._apply_output_theme()
         self._apply_host_area_theme()
+        self._apply_chrome_theme()
         # refresh host rows if layout already exists
         if hasattr(self, "host_layout"):
             for i in range(self.host_layout.count()):
@@ -706,15 +2254,13 @@ class MainWindow(QMainWindow):
         self.host_menu.clear()
         hosts = self.cfg.get("hosts", [])
         if not hosts:
-            self.host_menu.addAction("(no hosts)").setEnabled(False)
+            self.host_menu.addAction(t("tray_no_hosts")).setEnabled(False)
             return
         for h in hosts:
             name = h.get("name", h.get("ip", "?"))
             sub = self.host_menu.addMenu(name)
-            sub.addAction("Wake", lambda _, host=h: self.do_action(host, "wake"))
-            sub.addAction("Shutdown", lambda _, host=h: self.do_action(host, "shutdown"))
-            sub.addAction("Restart", lambda _, host=h: self.do_action(host, "restart"))
-            sub.addAction("Suspend", lambda _, host=h: self.do_action(host, "suspend"))
+            for act in ("wake", "shutdown", "restart", "suspend", "hibernate"):
+                sub.addAction(t(act), lambda _, host=h, a=act: self.do_action(host, a))
 
     def refresh_hosts(self):
         # clear
@@ -732,6 +2278,7 @@ class MainWindow(QMainWindow):
             lbl.setStyleSheet(f"color: {col}; padding: 20px; background: transparent;")
             self.host_layout.addWidget(lbl)
             self._update_tray_menu()
+            self._update_counts()
             return
 
         for h in hosts:
@@ -739,6 +2286,10 @@ class MainWindow(QMainWindow):
             self.host_layout.addWidget(row)
             self.host_rows[h["id"]] = row
         self._update_tray_menu()
+        self._update_counts()
+        self._fit_min_size()
+        self._relayout_rows()
+        QTimer.singleShot(0, self._ensure_focus)
 
     def add_host(self):
         dlg = HostDialog(None, self)
@@ -749,7 +2300,8 @@ class MainWindow(QMainWindow):
                 save_config(self.cfg)
                 self.refresh_hosts()
                 self._update_tray_menu()
-                if QMessageBox.question(self, t("pairing_title"), "Pair with this host now?") == QMessageBox.StandardButton.Yes:
+                self.check_hosts(data["id"])
+                if QMessageBox.question(self, t("pairing_title"), t("pair_now")) == QMessageBox.StandardButton.Yes:
                     self.start_pairing(data)
 
     def edit_host(self, host: dict):
@@ -762,8 +2314,10 @@ class MainWindow(QMainWindow):
                         self.cfg["hosts"][i] = data
                         break
                 save_config(self.cfg)
+                self.host_state.pop(host["id"], None)   # IP/port may have changed
                 self.refresh_hosts()
                 self._update_tray_menu()
+                self.check_hosts(data.get("id", host["id"]))
 
     def _fetch_and_save_mac(self, host: dict, cli_cfg_path: Path):
         """After pairing, try to get MAC from Buddy and save it."""
@@ -781,17 +2335,18 @@ class MainWindow(QMainWindow):
                             break
                     save_config(self.cfg)
                     logging.info("MAC auto-saved: %s", mac)
-                    QTimer.singleShot(0, lambda: QMessageBox.information(
-                        self, t("app_title"), t("mac_updated", mac=mac)))
+                    QTimer.singleShot(0, lambda: notify(self, t("mac_updated", mac=mac)))
         except Exception:
             logging.exception("Failed to fetch MAC")
 
     def remove_host(self, host: dict):
         name = host.get("name", host.get("ip"))
-        if QMessageBox.question(self, t("app_title"), t("confirm_remove", name=name)) == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, t("app_title"), t("confirm_remove", name=name), _YES_NO, _NO) == QMessageBox.StandardButton.Yes:
             self.cfg["hosts"] = [h for h in self.cfg["hosts"] if h["id"] != host["id"]]
             save_config(self.cfg)
+            self.host_state.pop(host["id"], None)
             self.refresh_hosts()
+            self._update_tray_icon(any(s.get("buddy") for s in self.host_state.values()))
 
     def move_host(self, host: dict, direction: int):
         hosts = self.cfg["hosts"]
@@ -809,28 +2364,31 @@ class MainWindow(QMainWindow):
         name = host.get("name", host.get("ip"))
 
         if action == "wake" and not host.get("mac"):
-            QMessageBox.warning(self, t("app_title"), t("no_mac"))
+            notify(self, t("no_mac"), kind="error")
             return
 
-        if action in ("shutdown", "restart", "suspend") and self.cfg["settings"].get("confirm_actions", True):
-            if QMessageBox.question(self, t("app_title"), t(f"confirm_{action}", name=name)) != QMessageBox.StandardButton.Yes:
+        if action in CONFIRM_ACTIONS and self.cfg["settings"].get("confirm_actions", True):
+            if QMessageBox.question(self, t("app_title"), t(f"confirm_{action}", name=name), _YES_NO, _NO) != QMessageBox.StandardButton.Yes:
                 return
 
         if hid not in self.action_locks:
             self.action_locks[hid] = threading.Lock()
         if not self.action_locks[hid].acquire(blocking=False):
-            QMessageBox.information(self, t("app_title"), t("action_running"))
+            notify(self, t("action_running"), kind="info")
             return
 
         def worker():
             try:
-                self.signals.action_done.emit(name, False, "running")  # signal start
-                rc, out, err = self._run_action(host, action)
+                self.signals.action_started.emit(hid, name, action)
+                if action in STEAM_ACTIONS:
+                    rc, out, err = self._run_cli_for_host(host, STEAM_ACTIONS[action], timeout=60)
+                else:
+                    rc, out, err = self._run_action(host, action)
                 msg = (out or err or f"Exit {rc}").strip()
                 success = rc == 0
-                self.signals.action_done.emit(name, success, msg)
+                self.signals.action_done.emit(hid, name, action, success, msg)
             except Exception as e:
-                self.signals.action_done.emit(name, False, str(e))
+                self.signals.action_done.emit(hid, name, action, False, str(e))
             finally:
                 self.action_locks[hid].release()
 
@@ -860,6 +2418,35 @@ class MainWindow(QMainWindow):
         finally:
             tmp.unlink(missing_ok=True)
 
+    def _cli_config_for(self, host: dict) -> dict:
+        """Same temporary CLI config as _run_action builds (kept separate so the
+        existing power/pairing path stays untouched)."""
+        ip = host["ip"]
+        return {
+            "version": 1,
+            "clientId": ensure_client_id(self.cfg),
+            "defaultHost": ip,
+            "hosts": {
+                ip: {
+                    "address": ip,
+                    "manualAddress": True,
+                    "infoPort": 47989,
+                    "buddyPort": host.get("buddy_port", 59999),
+                    "hostName": host.get("name", ip),
+                    "mac": host.get("mac")
+                }
+            }
+        }
+
+    def _run_cli_for_host(self, host: dict, args: list, timeout: int = 60) -> tuple[int, str, str]:
+        """Run any other MoonDeck CLI command (steam launch/close/status) for one host."""
+        tmp = APP_DIR / f".tmp_{uuid.uuid4().hex[:6]}.json"
+        try:
+            tmp.write_text(json.dumps(self._cli_config_for(host)))
+            return run_cli(args, timeout=timeout, config_override=tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+
     def start_pairing(self, host: dict):
         """Start pairing. Show PIN dialog that stays open while CLI runs."""
         try:
@@ -872,8 +2459,8 @@ class MainWindow(QMainWindow):
         # Pre-check: can we reach Buddy's API?
         ok, msg = check_buddy_api(ip, host.get("buddy_port", 59999))
         if not ok:
-            QMessageBox.critical(self, t("pairing_title"),
-                f"Cannot reach Buddy at {ip}:{host.get('buddy_port', 59999)}\n\n{msg}\n\nCheck that Buddy is running and the port is open.")
+            notify(self, t("pairing_unreachable", ip=ip, port=host.get('buddy_port', 59999)),
+                   f"{msg}\n\n" + t("pairing_unreachable_hint"), kind="error")
             return
         self.log_output(f"Buddy reachable: {msg}")
 
@@ -938,10 +2525,10 @@ class MainWindow(QMainWindow):
                     pass
                 try:
                     if result["ok"]:
-                        QMessageBox.information(self, t("pairing_title"), t("pairing_success"))
+                        notify(self, t("pairing_success"), kind="ok")
                     else:
                         msg = result["msg"] or "Unknown error"
-                        QMessageBox.critical(self, t("pairing_title"), t("pairing_failed") + "\n\n" + msg[:500])
+                        notify(self, t("pairing_failed"), msg[:500], kind="error")
                 except Exception as e:
                     logging.exception("Dialog error")
                 return
@@ -956,21 +2543,66 @@ class MainWindow(QMainWindow):
 
         dlg.button(QMessageBox.StandardButton.Cancel).clicked.connect(on_cancel)
 
-    def check_status(self):
-        self.log_output("Checking host status...")
-        def worker():
-            any_online = False
-            for h in self.cfg.get("hosts", []):
-                online = ping_host(h["ip"], h.get("buddy_port", 59999))
-                status = t("online") if online else t("offline")
-                if online:
-                    any_online = True
-                name = h.get("name", h.get("ip"))
-                logging.info("Status %s: %s", name, status)
-                self.signals.status_update.emit(h["id"], status)
-            self.signals.status_update.emit("__tray__", "online" if any_online else "offline")
-            self.signals.status_update.emit("__log__", "Status check complete")
-        threading.Thread(target=worker, daemon=True).start()
+    def check_status(self, *_signal_args):
+        """Timer, Refresh button and F5: check every host."""
+        self.check_hosts(None)
+
+    def check_hosts(self, only: str | None = None):
+        """Check all hosts (or one id) concurrently; each host in its own thread:
+        ICMP ping and Buddy API at the same time, then - only if Buddy answers -
+        'steam status'. Results arrive through Signals.host_status."""
+        hosts = [h for h in self.cfg.get("hosts", []) if only is None or h.get("id") == only]
+        if not hosts:
+            return
+        if only is None:
+            self.log_output("Checking host status...")
+        ensure_client_id(self.cfg)    # once on the GUI thread, not inside the workers
+        for h in hosts:
+            row = self.host_rows.get(h["id"])
+            if row and row.result is None and not row.checking:
+                row.checking = True
+                row._render()
+            with self._checking_lock:
+                if h["id"] in self._checking:
+                    continue          # previous check of this host still running
+                self._checking.add(h["id"])
+            threading.Thread(target=self._check_host, args=(dict(h),), daemon=True).start()
+
+    def _check_host(self, h: dict):
+        res = {"ping": False, "buddy": False, "steam": None, "time": ""}
+        try:
+            box = {}
+            tp = threading.Thread(target=lambda: box.update(ping=ping_icmp(h.get("ip", ""))), daemon=True)
+            tp.start()
+            res["buddy"] = check_buddy_api(h.get("ip", ""), h.get("buddy_port", 59999), timeout=2.0)[0]
+            tp.join(8)
+            res["ping"] = bool(box.get("ping"))
+            if res["buddy"]:
+                rc, out, err = self._run_cli_for_host(
+                    h, ["steam", "status", "--json", "--buddy-timeout", "2"], timeout=15)
+                res["steam"] = parse_steam_status(out) if rc == 0 else None
+                if rc != 0:
+                    logging.debug("steam status %s rc=%s %s", h.get("name"), rc, (err or out)[:200])
+        except Exception:
+            logging.exception("status check %s", h.get("name"))
+        res["time"] = time.strftime("%H:%M:%S")
+        logging.info("Status %s: ping=%s buddy=%s steam=%s", h.get("name", h.get("ip")),
+                     res["ping"], res["buddy"], res["steam"])
+        self.signals.host_status.emit(h["id"], res)
+
+    def on_host_status(self, hid: str, res: dict):
+        with self._checking_lock:
+            self._checking.discard(hid)
+        if not any(h.get("id") == hid for h in self.cfg.get("hosts", [])):
+            return                    # host was removed meanwhile
+        self.host_state[hid] = res
+        row = self.host_rows.get(hid)
+        if row:
+            row.set_result(res)
+        # tray: online as soon as Buddy answers on any host
+        self._update_tray_icon(any(s.get("buddy") for s in self.host_state.values()))
+        if not self._checking:
+            self.log_output("Status check complete")
 
     def on_status_update(self, hid: str, status: str):
         if hid == "__log__":
@@ -979,29 +2611,45 @@ class MainWindow(QMainWindow):
         if hid == "__tray__":
             self._update_tray_icon(status == "online")
             return
-        row = self.host_rows.get(hid)
-        if row:
-            row.set_status(status)
 
-    def on_action_done(self, title: str, success: bool, msg: str):
-        if msg == "running":
-            self.log_output(f"Running action on {title}...")
-            self.status_bar.setText(f"Working...")
-            return
+    def on_action_started(self, hid: str, title: str, action: str):
+        self.log_output(f"Running {action} on {title}...")
+        self.status_bar.setText(f"Working...")
+        r = self.host_rows.get(hid)
+        if r:
+            r.set_busy(True)
+
+    def on_action_done(self, hid: str, title: str, action: str, success: bool, msg: str):
         self.status_bar.setText("")
-        self.log_output(f"[{title}] {'OK' if success else 'FAIL'}: {msg}")
-        if success and "wake" in title.lower():
-            QMessageBox.information(self, t("app_title"), "Wake signal sent")
+        self.log_output(f"[{title}] {action} {'OK' if success else 'FAIL'}: {msg}")
+        r = self.host_rows.get(hid)
+        if r:
+            if success:
+                r.set_busy(False)
+            else:
+                r.set_failed(t(f"failed_{action}", title=title) + " " + (msg.splitlines()[0][:120] if msg else ""))
+        # the state changes after an action (PC boots / shuts down, Steam starts):
+        # re-check this host a bit later, and once more when it has settled
+        if self.cfg["settings"].get("auto_status", True):
+            for delay in (3000, 15000):
+                QTimer.singleShot(delay, lambda h=hid: self.check_hosts(h))
+        if success and action == "wake":
+            notify(self, t("wake_sent"), kind="ok")
         elif success:
-            QMessageBox.information(self, t("app_title"), f"{title}: Done")
+            notify(self, t(f"done_{action}", title=title), kind="ok")
         else:
-            QMessageBox.critical(self, t("app_title"), f"{title} failed.\n\nHost may be unreachable or Buddy is not responding.\n\n{msg[:200]}")
+            hint = t("hibernate_failed_hint") if action == "hibernate" else t("action_failed_hint")
+            notify(self, t(f"failed_{action}", title=title), hint + f"\n\n{msg[:200]}", kind="error")
 
     def open_options(self):
         dlg = OptionsDialog(self.cfg["settings"], self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
+        self._options_dlg = dlg          # live "last checked" while it is open
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        self._options_dlg = None
+        if accepted:
             new = dlg.get_settings()
             theme_changed = new.get("theme") != self.cfg["settings"].get("theme")
+            lang_changed = resolve_language(new) != resolve_language(self.cfg["settings"])
             self.cfg["settings"].update(new)
             save_config(self.cfg)
             setup_logging(new["logging"])
@@ -1010,9 +2658,11 @@ class MainWindow(QMainWindow):
                 self.status_timer.start(new["status_interval"] * 1000)
             else:
                 self.status_timer.stop()
-            if theme_changed:
-                QMessageBox.information(self, t("app_title"), "Theme changed. Restart required.")
-            QMessageBox.information(self, t("app_title"), t("settings_saved"))
+            for r in self.host_rows.values():
+                r._render()           # button enablement depends on auto_status
+            self._update_status_bar()
+            hints = ([t("theme_restart")] if theme_changed else []) + ([t("language_restart")] if lang_changed else [])
+            notify(self, t("settings_saved"), "\n".join(hints), kind="ok")
 
     def _make_tray_icon(self, online: bool) -> QIcon:
         pix = QPixmap(22, 22)
@@ -1047,19 +2697,24 @@ class MainWindow(QMainWindow):
         logging.info(text.strip())
 
     def _show_attribution(self):
-        QMessageBox.information(
-            self,
-            "BuddyRemote",
-            "This app uses the MoonDeck CLI by FrogTheFrog.\n\n"
-            "https://github.com/FrogTheFrog/moondeck\n\n"
-            "Thank you for the great work!"
-        )
+        QMessageBox.information(self, "BuddyRemote", t("attribution"))
         (APP_DIR / ".attributed").touch()
 
     def show_normal(self):
+        self._restore_window_state()
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def bring_to_front(self):
+        """Another start of BuddyRemote asked us to show the window."""
+        if self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        if self.isVisible():
+            self.raise_()
+            self.activateWindow()
+        else:
+            self.show_normal()
 
     def tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -1074,10 +2729,349 @@ class MainWindow(QMainWindow):
         release_lock()
         QApplication.quit()
 
+    # --- UI only: toast, status bar, log toggle ----------------------------
+    def show_toast(self, title: str, detail: str = "", kind: str = "ok"):
+        """Non-blocking feedback: toast + status bar + log (replaces info popups).
+        While the window is hidden in the tray, the tray balloon is used instead."""
+        title = title.strip()
+        if "\n" in title and not detail:
+            title, detail = title.split("\n", 1)
+        detail = detail.strip()
+        self.log_output(("ERROR: " if kind == "error" else "") + title + (f" – {detail}" if detail else ""))
+        self.status_bar.setText(title)
+        if not self.isVisible():
+            icon = QSystemTrayIcon.MessageIcon.Critical if kind == "error" else QSystemTrayIcon.MessageIcon.Information
+            self.tray.showMessage("BuddyRemote", title + (f"\n{detail}" if detail else ""), icon, 5000)
+            return
+        if len(detail) > 300:
+            detail = detail[:300] + "…"
+        self.toast.show_message(title, detail, kind, self._light(), 9000 if kind == "error" else 4500)
+
+    def _toast_base_bottom(self):
+        cw = self.centralWidget()
+        return self.scroll.mapTo(cw, self.scroll.rect().bottomLeft()).y() - 8
+
+    def _toast_bottom(self):
+        """Toast sits just above the log toggle (bottom right of the host list),
+        stacked above the update toast while that one is shown."""
+        b = self._toast_base_bottom()
+        if hasattr(self, "update_toast") and self.update_toast.isVisible():
+            b = self.update_toast.y() - 8
+        return b
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "update_toast") and self.update_toast.isVisible():
+            self.update_toast.place()
+        if hasattr(self, "toast") and self.toast.isVisible():
+            self.toast.place()
+
+    # --- update check (reads the latest GitHub release; never downloads) ----------
+    def check_for_updates(self, manual: bool = False):
+        if self._update_running:
+            return
+        self._update_running = True
+        if self._options_dlg:
+            self._options_dlg.update_lbl.setText(t("update_checking"))
+
+        def worker():
+            try:
+                rel = fetch_latest_release(timeout=5.0)
+                res = {"ok": True, "manual": manual, **rel, "newer": is_newer_version(rel["version"])}
+            except Exception as e:
+                logging.info("Update check failed: %s", e)
+                res = {"ok": False, "manual": manual, "error": str(e)[:200]}
+            self.signals.update_result.emit(res)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_update_result(self, res: dict):
+        self._update_running = False
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        st.setValue("update/last_checked", time.strftime("%Y-%m-%dT%H:%M:%S"))
+        st.setValue("update/last_result", ("newer:" + res["version"]) if res.get("ok") and res["newer"]
+                    else ("current" if res.get("ok") else "error"))
+        st.sync()
+        if self._options_dlg:
+            self._options_dlg.update_lbl.setText(self.update_status_text())
+        if not res.get("ok"):
+            if res.get("manual"):   # the automatic check stays silent
+                notify(self, t("update_failed"), res.get("error", ""), kind="error")
+            return
+        self.log_output(f"Update check: latest {res['version']}, running {APP_VERSION}")
+        if res["newer"]:
+            self._pending_update = res
+            if self.isVisible():
+                self._show_update_toast()
+            else:
+                self.tray.showMessage("BuddyRemote", t("update_available", version=res["version"]),
+                                      QSystemTrayIcon.MessageIcon.Information, 8000)
+        elif res.get("manual"):
+            notify(self, t("update_current", version=APP_VERSION), kind="ok")
+
+    def _show_update_toast(self):
+        if not self._pending_update:
+            return
+        self.update_toast.show_update(self._pending_update["version"], self._light())
+        if self.toast.isVisible():
+            self.toast.place()
+
+    def _open_update_page(self):
+        url = (self._pending_update or {}).get("url") or "https://github.com/deciderino/BuddyRemote/releases/latest"
+        QDesktopServices.openUrl(QUrl(url))
+        self.update_toast.hide()
+
+    def update_status_text(self) -> str:
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        when = str(st.value("update/last_checked", "") or "")
+        if not when:
+            return t("update_never")
+        try:
+            tm = time.strptime(when, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return t("update_never")
+        if time.strftime("%Y-%m-%d", tm) == time.strftime("%Y-%m-%d"):
+            day = t("today") + " " + time.strftime("%H:%M", tm)
+        else:
+            day = time.strftime(t("date_fmt"), tm)
+        res = str(st.value("update/last_result", "") or "")
+        if res.startswith("newer:"):
+            what = t("update_res_newer", version=res[6:])
+        elif res == "current":
+            what = t("update_res_current")
+        else:
+            what = t("update_res_error")
+        return t("update_last_checked", when=day, result=what)
+
+    def _update_counts(self):
+        if not hasattr(self, "count_lbl"):
+            return
+        n = len(self.host_rows)
+        on = sum(1 for r in self.host_rows.values() if r.state == "online")
+        self.count_lbl.setText(t("count_hosts", n=n, online=on))
+
+    def _update_status_bar(self):
+        st = self.cfg.get("settings", {})
+        if st.get("auto_status", True):
+            self.refresh_lbl.setText(t("auto_refresh_every", s=st.get("status_interval", 30)))
+        else:
+            self.refresh_lbl.setText(t("auto_refresh_off"))
+        self.cli_lbl.setText("MoonDeck CLI " + ("✓" if cli_available() else "✗"))
+        self._update_counts()
+
+    def _set_log_visible(self, on: bool):
+        self.output.setVisible(on)
+        if hasattr(self, "tray"):
+            self._fit_min_size()
+        self.log_btn.setText(("▾ " if on else "▸ ") + t("log_toggle"))
+        if hasattr(self, "toast") and self.toast.isVisible():
+            QTimer.singleShot(0, self.toast.place)
+
+    def toggle_log(self):
+        on = not self.output.isVisible()
+        self._set_log_visible(on)
+        try:
+            st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+            st.setValue("log_visible", "true" if on else "false")
+            st.sync()
+        except Exception:
+            logging.exception("window state save failed")
+
+    def _on_focus_changed(self, old, new):
+        """Highlight the card that contains the keyboard focus (hidden in mouse mode)."""
+        visible = getattr(self, "input_mode", None) is None or self.input_mode.nav_visible
+        for r in self.host_rows.values():
+            try:
+                r.set_current(visible and new is not None and r.isAncestorOf(new))
+            except RuntimeError:
+                pass
+
+    # --- UI only: keyboard/controller navigation -------------------------
+    @staticmethod
+    def _navigable(b) -> bool:
+        try:
+            return b.isEnabled() and not b.isHidden()
+        except RuntimeError:
+            return False
+
+    def _nav_grid(self):
+        """Arrow-key/controller grid: one row per toolbar, host card and log button.
+        Disabled buttons are skipped (not focusable)."""
+        grid = [self.toolbar_buttons] + [r.nav_buttons for r in self.host_rows.values()]
+        if self.update_toast.isVisible():
+            grid.append(self.update_toast.buttons)
+        grid.append([self.log_btn])
+        grid = [[b for b in row if self._navigable(b)] for row in grid]
+        return [row for row in grid if row]
+
+    def _focus_first(self):
+        target = None
+        for r in self.host_rows.values():
+            target = next((b for b in r.nav_buttons if self._navigable(b)), None)
+            if target:
+                break
+        target = target or self.toolbar_buttons[0]
+        target.setFocus(Qt.FocusReason.TabFocusReason)
+        self.scroll.ensureWidgetVisible(target)
+
+    @staticmethod
+    def _center_x(w) -> int:
+        return w.mapToGlobal(w.rect().center()).x()
+
+    def _ensure_focus(self):
+        if self.isVisible() and QApplication.activeModalWidget() is None:
+            fw = QApplication.focusWidget()
+            if fw is None or not fw.isVisible() or fw.window() is not self:
+                self._focus_first()
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.KeyPress and isinstance(obj, QPushButton):
+            key = ev.key()
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and ev.modifiers() in (
+                    Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
+                obj.click()
+                return True
+            if key in _NAV_KEYS and ev.modifiers() in (
+                    Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
+                grid = self._nav_grid()
+                for r, row in enumerate(grid):
+                    if obj in row:
+                        c = row.index(obj)
+                        if key == Qt.Key.Key_Left:
+                            c = max(0, c - 1)
+                        elif key == Qt.Key.Key_Right:
+                            c = min(len(row) - 1, c + 1)
+                        else:
+                            nr = max(0, r - 1) if key == Qt.Key.Key_Up else min(len(grid) - 1, r + 1)
+                            if nr != r:
+                                # card to card: the same button if usable there, else the
+                                # usable button closest in x (also toolbar <-> cards)
+                                nk = obj.property("navKey")
+                                same = [i for i, b in enumerate(grid[nr]) if nk and b.property("navKey") == nk]
+                                if same:
+                                    c = same[0]
+                                else:
+                                    ref = self._center_x(obj)
+                                    c = min(range(len(grid[nr])), key=lambda i: abs(self._center_x(grid[nr][i]) - ref))
+                            r = nr
+                        target = grid[r][c]
+                        target.setFocus(Qt.FocusReason.TabFocusReason)
+                        self.scroll.ensureWidgetVisible(target)
+                        return True
+        return super().eventFilter(obj, ev)
+
+    # --- UI only: window size/state ----------------------------------------
+    def _available(self):
+        scr = self.screen() or QApplication.primaryScreen()
+        return scr.availableGeometry() if scr else None
+
+    # UI only: cards never get wider than this (wide/maximized windows keep the
+    # buttons close to the host name; cards are centered).
+    CARD_MAX_EXTRA = 200
+
+    def _relayout_rows(self):
+        """UI only: pick one-line or two-line cards from the visible width and
+        center the cards when the window is very wide."""
+        rows = list(self.host_rows.values())
+        if not rows:
+            self.host_layout.setContentsMargins(0, 0, 0, 0)
+            return
+        vw = self.scroll.viewport().width()
+        need = max(r.wide_width() for r in rows)
+        cap = need + self.CARD_MAX_EXTRA
+        side = max(0, (vw - cap) // 2)
+        m = self.host_layout.contentsMargins()
+        if m.left() != side:
+            self.host_layout.setContentsMargins(side, 0, side, 0)
+        compact = vw - 2 * side < need
+        for r in rows:
+            r.set_compact(compact)
+
+    def _fit_min_size(self):
+        """UI only: minimum size computed from the real layout (scales with font
+        size and display scaling): the narrowest card with all buttons visible
+        (two-line card), toolbar and status bar; height keeps one card visible."""
+        avail = self._available()
+        rows = list(self.host_rows.values())
+        bm = self._body_layout.contentsMargins()
+        chrome_w = bm.left() + bm.right() + 2 * self.scroll.frameWidth() + self.scroll.verticalScrollBar().sizeHint().width()
+        card_w = max([r.compact_width() for r in rows] + [0])
+        perm = sum(l.sizeHint().width() for l in (self.count_lbl, self.refresh_lbl, self.cli_lbl)) + 60
+        w = max(card_w + chrome_w, self.toolbar.minimumSizeHint().width(), perm, 420)
+        card_h = max([r.compact_height() for r in rows] + [80])
+        h = (self.toolbar.sizeHint().height() + (self.statusBar().sizeHint().height() if self.statusBar() else 0)
+             + bm.top() + bm.bottom() + 2 * self.scroll.frameWidth() + card_h
+             + self._body_layout.spacing() * 2 + self.log_btn.sizeHint().height())
+        if self.output.isVisible():
+            h += self.output.minimumSizeHint().height() + self._body_layout.spacing()
+        if avail:
+            w, h = min(w, avail.width()), min(h, avail.height())
+        self.setMinimumSize(w, h)
+
+    @staticmethod
+    def _is_wayland() -> bool:
+        return QApplication.platformName().startswith("wayland")
+
+    def _clamp_to_screen(self):
+        """UI only: saved geometry larger than the screen is shrunk; a window whose
+        title bar ended up off-screen (X11; Wayland ignores positions) is pulled back."""
+        avail = self._available()
+        if not avail or self.isMaximized() or self.isFullScreen():
+            return
+        if self.width() > avail.width() or self.height() > avail.height():
+            self.resize(min(self.width(), avail.width()), min(self.height(), avail.height()))
+        if self._is_wayland():
+            return
+        fg = self.frameGeometry()
+        visible = False
+        for scr in QApplication.screens():
+            a = scr.availableGeometry()
+            title = fg.adjusted(0, 0, 0, -(fg.height() - 40))  # top 40 px: the grab area
+            if a.intersected(title).width() >= 100:
+                visible = True
+                break
+        if not visible:
+            x = avail.x() + (avail.width() - fg.width()) // 2
+            y = avail.y() + (avail.height() - fg.height()) // 2
+            self.move(max(avail.x(), x), max(avail.y(), y))
+
+    def _restore_window_state(self):
+        self._fit_min_size()
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        geo = st.value("geometry")
+        if not (geo and self.restoreGeometry(geo)):
+            avail = self._available()
+            w, h = 900, 640
+            if avail:
+                w = max(min(w, int(avail.width() * 0.9)), min(self.minimumWidth(), avail.width()))
+                h = max(min(h, int(avail.height() * 0.9)), min(self.minimumHeight(), avail.height()))
+            self.resize(w, h)
+        self._clamp_to_screen()
+
+    def _save_window_state(self):
+        if not self._was_shown:
+            return
+        try:
+            st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+            st.setValue("geometry", self.saveGeometry())
+            st.sync()
+        except Exception:
+            logging.exception("window state save failed")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._was_shown = True
+        QTimer.singleShot(0, self._focus_first)
+        if self._pending_update and not self.update_toast.isVisible():
+            QTimer.singleShot(300, self._show_update_toast)   # found while hidden in the tray
+
+    def hideEvent(self, event):
+        self._save_window_state()
+        super().hideEvent(event)
+
     def closeEvent(self, event):
         event.ignore()
         self.hide()
-        self.tray.showMessage("BuddyRemote", "Running in background", QSystemTrayIcon.MessageIcon.Information, 2000)
+        self.tray.showMessage("BuddyRemote", t("running_in_background"), QSystemTrayIcon.MessageIcon.Information, 2000)
 
 # ---------------------------------------------------------------------------
 class DownloadDialog(QDialog):
@@ -1101,14 +3095,25 @@ class DownloadDialog(QDialog):
         QApplication.processEvents()
 
 def main():
-    if not acquire_lock():
-        print("BuddyRemote is already running.")
-        sys.exit(0)
+    prepare_packaged_dir()
 
+    # UI only: fractional display scaling (125 %, 150 %, ...) is used as-is instead of
+    # being rounded to whole numbers. This is already the Qt 6 default; set explicitly
+    # so it stays that way (all sizes in the stylesheets are device-independent px).
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setApplicationName("BuddyRemote")
+    if not acquire_lock():
+        if notify_running_instance():
+            print("BuddyRemote is already running - showing its window.")
+        else:
+            print("BuddyRemote is already running.")
+        sys.exit(0)
     # Apply theme to all dialogs
     cfg = load_config()
+    lang_code = resolve_language(cfg.get("settings", {}))
+    set_language(lang_code)
+    install_qt_translations(app, lang_code)
     light = cfg.get("settings", {}).get("theme", "Dark") == "Light"
     if light:
         app.setStyleSheet("""
@@ -1121,7 +3126,7 @@ def main():
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #888; border-radius: 3px; background: #fff; }
             QCheckBox::indicator:checked { background: #4caf50; border-color: #388e3c; }
             QCheckBox::indicator:checked:hover { background: #66bb6a; }
-        """)
+        """ + touch_css(True))
     else:
         app.setStyleSheet("""
             QDialog, QMessageBox { background: #1e1e1e; color: #e0e0e0; }
@@ -1133,23 +3138,28 @@ def main():
             QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #666; border-radius: 3px; background: #2a2a2a; }
             QCheckBox::indicator:checked { background: #4caf50; border-color: #388e3c; }
             QCheckBox::indicator:checked:hover { background: #66bb6a; }
-        """)
+        """ + touch_css(False))
     app.setApplicationDisplayName("BuddyRemote")
     app.setOrganizationName("BuddyRemote")
     app.setDesktopFileName("buddyremote")
     app.setQuitOnLastWindowClosed(False)
 
     # Ensure CLI is present
-    if not cli_available():
+    if PACKAGED:
+        # Packaged: the CLI comes from the bundle (prepare_packaged_dir); never download.
+        if not cli_available():
+            QMessageBox.warning(None, "BuddyRemote", t("cli_bundled_missing"))
+    elif not cli_available():
         dlg = DownloadDialog()
         dlg.show()
         ok = download_cli(dlg.set_status)
         dlg.close()
         if not ok:
-            QMessageBox.critical(None, "BuddyRemote", "Failed to download MoonDeck CLI.\nCheck your internet connection and try again.")
+            QMessageBox.critical(None, "BuddyRemote", t("cli_download_failed"))
             sys.exit(1)
 
     win = MainWindow()
+    start_instance_server(win.bring_to_front)
     if not win.cfg["settings"].get("start_minimized", True):
         win.show()
     sys.exit(app.exec())

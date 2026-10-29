@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=BuddyRemote
+Comment=Wake, shut down, restart or suspend PCs via MoonDeck Buddy
+Exec=BuddyRemote
+Icon=buddyremote
+Terminal=false
+Categories=Utility;Network;
+StartupWMClass=BuddyRemote
