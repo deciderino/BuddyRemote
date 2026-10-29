@@ -2,7 +2,7 @@
 
 # BuddyRemote
 
-### Download. Extract. Run. Pair. Done.
+### Download. Run. Pair. Done.
 
 **Simple remote PC control. No complicated setup.**
 
@@ -51,17 +51,44 @@ It was made for **Linux HTPCs, Steam Deck Desktop Mode, and home game streaming 
 
 ### Screenshots
 
-| Light theme | Narrow window |
-| :---: | :---: |
-| <img src="docs/screenshots/main-window-light.png" alt="BuddyRemote main window in the light theme" width="420"> | <img src="docs/screenshots/compact.png" alt="BuddyRemote in a narrow window: the group labels move above their buttons" width="252"> |
-| **Options** | **Update notice** |
-| <img src="docs/screenshots/options.png" alt="BuddyRemote options dialog of the AppImage, with update settings and the bundled MoonDeck CLI" width="252"> | <img src="docs/screenshots/update-notice.png" alt="Blue update notice with a Download button in the bottom right of the main window" width="420"> |
+<table>
+  <tr>
+    <th>Add a host</th>
+    <th>Pairing</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/add-host.png" alt="Add Host dialog with name, IP address, optional MAC address and Buddy port" width="420"></td>
+    <td><img src="docs/screenshots/pairing.png" alt="Pairing dialog asking to enter the PIN on the host and waiting for confirmation" width="420"></td>
+  </tr>
+  <tr>
+    <th>Settings (Options)</th>
+    <th>Host settings (✎ Edit)</th>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/options.png" alt="Options dialog of the AppImage with status interval, startup, theme, language and update settings and the bundled MoonDeck CLI" width="252"></td>
+    <td><img src="docs/screenshots/edit-host.png" alt="Edit Host dialog with the name, IP address, MAC address and Buddy port of one host" width="420"></td>
+  </tr>
+  <tr>
+    <th>Update notice</th>
+    <th>Narrow window</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/update-notice.png" alt="Blue update notice with a Download button in the bottom right of the main window" width="420"></td>
+    <td align="center"><img src="docs/screenshots/compact.png" alt="BuddyRemote in a narrow window: the group labels move above their buttons" width="252"></td>
+  </tr>
+  <tr>
+    <th colspan="2">Light theme</th>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/screenshots/main-window-light.png" alt="BuddyRemote main window in the light theme" width="600"></td>
+  </tr>
+</table>
 
-<sub>The hosts and IP addresses in the screenshots are examples.</sub>
+<sub>Pairing starts after adding a host (BuddyRemote asks "Pair with this host now?"). The hosts, IP and MAC addresses and the PIN in the screenshots are examples.</sub>
 
 ## Getting started
 
-**Download. Extract. Run. Pair. Done.**
+**Download. Run. Pair. Done.**
 
 **1. Set up MoonDeck Buddy on the host**
 
