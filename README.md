@@ -53,20 +53,12 @@ It was made for **Linux HTPCs, Steam Deck Desktop Mode, and home game streaming 
 
 <table>
   <tr>
-    <th>Add a host</th>
     <th>Pairing</th>
+    <th>Settings</th>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/add-host.png" alt="Add Host dialog with name, IP address, optional MAC address and Buddy port" width="420"></td>
     <td><img src="docs/screenshots/pairing.png" alt="Pairing dialog asking to enter the PIN on the host and waiting for confirmation" width="420"></td>
-  </tr>
-  <tr>
-    <th>Settings (Options)</th>
-    <th>Host settings (✎ Edit)</th>
-  </tr>
-  <tr>
-    <td align="center"><img src="docs/screenshots/options.png" alt="Options dialog of the AppImage with status interval, startup, theme, language and update settings and the bundled MoonDeck CLI" width="252"></td>
-    <td><img src="docs/screenshots/edit-host.png" alt="Edit Host dialog with the name, IP address, MAC address and Buddy port of one host" width="420"></td>
+    <td><img src="docs/screenshots/settings.png" alt="Settings dialog of the AppImage with status interval, startup, theme, language and update settings and the bundled MoonDeck CLI" width="420"></td>
   </tr>
   <tr>
     <th>Update notice</th>
@@ -84,7 +76,7 @@ It was made for **Linux HTPCs, Steam Deck Desktop Mode, and home game streaming 
   </tr>
 </table>
 
-<sub>Pairing starts after adding a host (BuddyRemote asks "Pair with this host now?"). The hosts, IP and MAC addresses and the PIN in the screenshots are examples.</sub>
+<sub>Pairing starts right after adding a host (BuddyRemote asks "Pair with this host now?"). The hosts, IP addresses and the PIN in the screenshots are examples.</sub>
 
 ## Getting started
 
