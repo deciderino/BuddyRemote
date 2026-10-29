@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QAbstractButton, QStatusBar, QBoxLayout, QSizePolicy,
     QAbstractSpinBox
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile, QUrl
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile, QUrl, QTranslator, QLibraryInfo
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices
 
@@ -139,6 +139,19 @@ def resolve_language(settings: dict) -> str:
 def set_language(code: str):
     global L
     L = load_lang(code)
+
+_qt_translator = None
+
+def install_qt_translations(qapp, code: str):
+    """Qt's own strings (Yes/No/Cancel in message boxes, context menus) in the UI
+    language; qtbase_*.qm ships with the PyQt6 wheel / bundle. English needs none."""
+    global _qt_translator
+    if code == "en" or _qt_translator is not None:
+        return
+    tr = QTranslator(qapp)
+    if tr.load(f"qtbase_{code}", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+        qapp.installTranslator(tr)
+        _qt_translator = tr
 
 L = load_lang()
 def t(key, **kw):
@@ -3098,7 +3111,9 @@ def main():
         sys.exit(0)
     # Apply theme to all dialogs
     cfg = load_config()
-    set_language(resolve_language(cfg.get("settings", {})))
+    lang_code = resolve_language(cfg.get("settings", {}))
+    set_language(lang_code)
+    install_qt_translations(app, lang_code)
     light = cfg.get("settings", {}).get("theme", "Dark") == "Light"
     if light:
         app.setStyleSheet("""
