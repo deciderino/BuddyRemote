@@ -25,9 +25,9 @@ It was made for **Linux HTPCs, Steam Deck Desktop Mode, and home game streaming 
 > [!IMPORTANT]
 > **For trusted local home networks only.** BuddyRemote uses MoonDeck Buddy's existing security model. Do not expose MoonDeck Buddy's service port directly to the internet.
 
-<!-- Add a real screenshot from the app here, for example:
-![BuddyRemote main window](docs/screenshots/main-window.png)
--->
+<p align="center">
+  <img src="docs/screenshots/main-window.png" alt="BuddyRemote main window with three hosts: one fully online with Steam Big Picture running, one PC that is on but MoonDeck Buddy is not answering, and one PC that is off" width="900">
+</p>
 
 ## Features
 
@@ -41,13 +41,23 @@ It was made for **Linux HTPCs, Steam Deck Desktop Mode, and home game streaming 
 | **Multiple hosts** | Manage several PCs from one window. |
 | **Easy pairing** | Enter the host IP address and complete MoonDeck Buddy pairing. |
 | **Automatic MAC detection** | Retrieve the host's MAC address through the MoonDeck CLI. |
-| **Portable launch** | Run from an extracted folder without a traditional system-wide app installation. |
-| **Automatic setup** | Create a Python virtual environment and install required dependencies on first launch. |
+| **Portable launch** | A single AppImage, no installation needed. You can also run it from the source folder without a system-wide installation. |
+| **Automatic setup** | When running from source, BuddyRemote creates a Python virtual environment and installs the required dependencies on first launch. |
 | **MoonDeck CLI setup** | The AppImage includes the MoonDeck CLI. When running from source, the CLI is downloaded automatically, with checksum verification when available. |
 | **Update notice** | On startup, BuddyRemote asks GitHub whether a newer release exists and shows a small notice with a download link. Nothing is downloaded or installed automatically. You can turn this off in Options. |
 | **System tray** | Keep BuddyRemote conveniently accessible. The tray icon turns green when MoonDeck Buddy is reachable on at least one host. |
 | **German & English** | The language follows the system, or you can pick one in Options. |
 | **Optional logs** | Enable application logging for troubleshooting. |
+
+### Screenshots
+
+| Light theme | Narrow window |
+| :---: | :---: |
+| <img src="docs/screenshots/main-window-light.png" alt="BuddyRemote main window in the light theme" width="420"> | <img src="docs/screenshots/compact.png" alt="BuddyRemote in a narrow window: the group labels move above their buttons" width="252"> |
+| **Options** | **Update notice** |
+| <img src="docs/screenshots/options.png" alt="BuddyRemote options dialog of the AppImage, with update settings and the bundled MoonDeck CLI" width="252"> | <img src="docs/screenshots/update-notice.png" alt="Blue update notice with a Download button in the bottom right of the main window" width="420"> |
+
+<sub>The hosts and IP addresses in the screenshots are examples.</sub>
 
 ## Getting started
 
@@ -59,17 +69,35 @@ Install [MoonDeck Buddy](https://github.com/FrogTheFrog/moondeck-buddy) on the *
 
 **2. Download BuddyRemote**
 
-Get the archive from [GitHub Releases](https://github.com/deciderino/BuddyRemote/releases) and extract it on your **Linux client**.
+Get `BuddyRemote-x86_64.AppImage` from [GitHub Releases](https://github.com/deciderino/BuddyRemote/releases) on your **Linux client**. Optionally, download `BuddyRemote-x86_64.AppImage.sha256` as well and check the download:
+
+```bash
+sha256sum -c BuddyRemote-x86_64.AppImage.sha256
+```
 
 **3. Run it**
 
-Open a terminal in the extracted folder and start:
+Make the AppImage executable and start it:
+
+```bash
+chmod +x BuddyRemote-x86_64.AppImage
+./BuddyRemote-x86_64.AppImage
+```
+
+Everything is bundled, including the MoonDeck CLI. On most desktops you can also make it executable in the file's properties and then double-click it.
+
+<details>
+<summary>Running from source instead</summary>
+
+Download the source code (or clone the repository), open a terminal in the folder and start:
 
 ```bash
 ./BuddyRemote
 ```
 
 The launcher sets up its own Python virtual environment, installs the required Python dependencies, and downloads the MoonDeck CLI when needed.
+
+</details>
 
 **4. Pair your host**
 
@@ -81,7 +109,7 @@ Control your host from the BuddyRemote GUI.
 
 ### Requirements
 
-- **Client:** Linux with Python **3.10+** and working `venv` support.
+- **Client:** 64-bit (x86_64) Linux with glibc **2.34+** for the AppImage (e.g. Ubuntu 22.04+, Fedora 35+, Bazzite, SteamOS 3). Running from source needs Python **3.10+** with working `venv` support instead.
 - **Host:** Windows or Linux with **MoonDeck Buddy** installed.
 - Both devices connected to a **trusted local network**.
 - Wake-on-LAN supported and enabled on the host if you want remote wake-up.
@@ -104,7 +132,7 @@ powercfg /hibernate on
 
 On Linux hosts, hibernation needs a swap partition or swap file at least as large as the RAM, and a configured resume device. If hibernation isn't available, BuddyRemote shows an error message and the PC keeps running.
 
-> **First launch:** Internet access is needed to download Python dependencies and the MoonDeck CLI. After setup, BuddyRemote operates over your local network without requiring an ongoing internet connection.
+> **First launch from source:** Internet access is needed to download Python dependencies and the MoonDeck CLI. The AppImage doesn't need this. After setup, BuddyRemote operates over your local network without requiring an ongoing internet connection.
 >
 > **Debian/Ubuntu-based systems:** If `venv` isn't available, you may need to install `python3-venv` through your package manager.
 
