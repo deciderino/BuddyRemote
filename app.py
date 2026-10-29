@@ -128,6 +128,7 @@ def touch_css(light: bool) -> str:
     edit = "#e65100" if light else "#ffb74d"
     edit_bg = "#fff3e0" if light else "#2b2620"
     prim, prim_b, prim_h = ("#1565c0", "#0d47a1", "#1976d2") if light else ("#1f5f8b", "#2a7ab0", "#2670a3")
+    dis_bg, dis_fg, dis_b = ("#ececec", "#a6a6a6", "#dddddd") if light else ("#242424", "#5c5c5c", "#323232")
     return f"""
         QWidget {{ font-size: 15px; }}
         QPushButton {{ min-height: 32px; min-width: 24px; padding: 6px 10px; border-width: 2px; border-radius: 6px; }}
@@ -145,6 +146,7 @@ def touch_css(light: bool) -> str:
         QCheckBox[navFocus="true"] {{ border: 2px solid {acc}; background: {focus_bg}; }}
         QCheckBox::indicator {{ width: 26px; height: 26px; }}
         QLineEdit[editMode="true"], QSpinBox[editMode="true"], QComboBox[editMode="true"] {{ border: 2px solid {edit}; background: {edit_bg}; }}
+        QPushButton:disabled, QPushButton[primary="true"]:disabled {{ background: {dis_bg}; color: {dis_fg}; border: 2px solid {dis_b}; }}
     """
 
 
@@ -645,41 +647,44 @@ STEAM_ACTIONS = {
 CONFIRM_ACTIONS = ("shutdown", "restart", "suspend", "hibernate", "steam_close")
 
 class HostRow(QFrame):
-    """One host as a card: status dot, name + IP pill, status line, and one visible
-    button per existing action. UI only; every button calls the same handler as before."""
+    """One host as a card (UI only; every button calls the same handlers as before):
+      line 1: status dot, name, IP pill ............ ↑ ↓ ✎   ✕
+      line 2: chips PC / Buddy / Steam, "checked HH:MM:SS" (+ optional red hint)
+      line 3: POWER [Wake|Shut down|Restart|Standby|Hibernate]   STEAM [Start/Close]
+    All buttons are always visible; the ones that make no sense for the last status
+    check are disabled (not focusable, tooltip says why). Narrow windows stack the
+    groups (label above its buttons) and split the chips into two rows (set_compact)."""
+    POWER = ("wake", "shutdown", "restart", "suspend", "hibernate")
+    ICON = 48           # ↑ ↓ ✎ ✕ are ICON x ICON px (touch target)
+    GROUP_GAP = 18
+
     def __init__(self, host: dict, parent_app):
         super().__init__()
         self.host = host
         self.app = parent_app
         self.setObjectName("hostCard")
         self.setProperty("current", False)
-        self.state = "unknown"      # UI only: online / offline / unknown (last status check)
-        self.busy = False           # UI only: an action is running for this host
-        self.failed = False         # UI only: the last action failed
-
-        # UI only: [head | buttons] side by side; on narrow windows the buttons wrap
-        # onto a second line under the name (set_compact), so nothing gets cut off.
-        self._outer = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
-        self._outer.setContentsMargins(14, 10, 10, 10)
-        self._outer.setSpacing(6)
+        self.state = "unknown"      # online / offline / unknown: PC state of the last check
+        self.busy = False           # an action is running for this host
+        self.failed = False         # the last action failed
+        self.result = None          # last status check (dict, see MainWindow._check_host)
+        self.checking = False       # first check still pending ("checking…")
+        self.steam_running = None   # True / False / None (unknown)
         self._compact = False
-        head = QHBoxLayout()
-        head.setSpacing(6)
-        self._head = head
-        layout = QHBoxLayout()
-        layout.setSpacing(6)
-        self._btns = layout
-        self.nav_buttons = []  # UI only: arrow-key navigation order
+        self.nav_buttons = []       # arrow-key/controller order: power, steam, ↑ ↓ ✎ ✕
 
-        self.dot = QLabel()
-        self.dot.setFixedSize(14, 14)
-        head.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
-        head.addSpacing(4)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 10, 10, 12)
+        root.setSpacing(6)
+        self._root = root
 
-        info = QVBoxLayout()
-        info.setSpacing(2)
+        # --- line 1 ----------------------------------------------------------
         top = QHBoxLayout()
         top.setSpacing(8)
+        self._top = top
+        self.dot = QLabel()
+        self.dot.setFixedSize(14, 14)
+        top.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
         self.name_lbl = QLabel(host.get("name", "Unnamed"))
         self.name_lbl.setObjectName("hostName")
         self.name_lbl.setWordWrap(True)
@@ -689,101 +694,206 @@ class HostRow(QFrame):
         self.name_lbl.setMinimumWidth(min(QFontMetrics(nf).horizontalAdvance(self.name_lbl.text()) + 6, 220))
         self.ip_lbl = QLabel(host.get("ip", ""))
         self.ip_lbl.setObjectName("ipPill")
-        top.addWidget(self.name_lbl, 0)
+        top.addWidget(self.name_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         top.addWidget(self.ip_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         top.addStretch(1)
-        self.status_lbl = QLabel()
-        self.status_lbl.setObjectName("hostSub")
-        self.status_lbl.setWordWrap(True)
-        self.error_lbl = QLabel()
-        self.error_lbl.setObjectName("hostError")
-        self.error_lbl.setWordWrap(True)
-        self.error_lbl.hide()
-        info.addLayout(top)
-        info.addWidget(self.status_lbl)
-        info.addWidget(self.error_lbl)
-        head.addLayout(info, 1)
-        self._outer.addLayout(head, 1)
-        self._outer.addLayout(layout, 0)
-        self._status_text = t("unknown")
-        self._checked = ""
-
-        self.steam_running = None   # True / False / None (unknown), from the status check
-        # Action buttons (same handlers as before)
-        for act, label in [("wake", t("wake")), ("shutdown", t("shutdown")),
-                           ("restart", t("restart")), ("suspend", t("suspend")),
-                           ("hibernate", t("hibernate"))]:
-            btn = QPushButton(label)
-            btn.setProperty("touchRole", "action")  # min width via touch_css
-            if act == "wake":
-                btn.setProperty("primary", True)
-            btn.setToolTip(t(f"tip_{act}"))
-            btn.clicked.connect(lambda _, a=act: self.app.do_action(self.host, a))
-            btn.installEventFilter(self.app)
-            self.nav_buttons.append(btn)
-            layout.addWidget(btn)
-        self.steam_btn = QPushButton(t("steam_launch"))
-        self.steam_btn.setProperty("touchRole", "action")
-        self.steam_btn.setToolTip(t("tip_steam_launch"))
-        self.steam_btn.clicked.connect(lambda: self.app.do_action(
-            self.host, "steam_close" if self.steam_running else "steam_launch"))
-        self.steam_btn.installEventFilter(self.app)
-        self.nav_buttons.append(self.steam_btn)
-        layout.addWidget(self.steam_btn)
-
-        layout.addSpacing(6)
-        # Controls
+        self.mgmt_buttons = []
         for text, tip, slot in [("↑", "tip_up", lambda: self.app.move_host(self.host, -1)),
                                 ("↓", "tip_down", lambda: self.app.move_host(self.host, 1)),
                                 ("✎", "tip_edit", lambda: self.app.edit_host(self.host)),
                                 ("✕", "tip_remove", lambda: self.app.remove_host(self.host))]:
             b = QPushButton(text)
             b.setProperty("touchRole", "icon")
-            b.setFixedWidth(40)
+            b.setProperty("mgmt", True)
+            b.setFixedSize(self.ICON, self.ICON)
             b.setToolTip(t(tip))
+            b.setProperty("navKey", tip)
             b.clicked.connect(slot)
             b.installEventFilter(self.app)
+            if text == "✕":
+                top.addSpacing(14)      # remove is kept apart from the harmless buttons
+            top.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.mgmt_buttons.append(b)
+        root.addLayout(top)
+        indent = self.dot.width() + top.spacing()
+        self._indent = indent
+
+        # --- line 2: chips -----------------------------------------------------
+        self.chips = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.chips.setContentsMargins(indent, 0, 0, 0)
+        self.chips.setSpacing(6)
+        ra, rb = QHBoxLayout(), QHBoxLayout()
+        ra.setSpacing(6)
+        rb.setSpacing(6)
+        self._chip_rows = (ra, rb)
+        self.chip_pc, self.chip_buddy, self.chip_steam = (QLabel() for _ in range(3))
+        for ch in (self.chip_pc, self.chip_buddy, self.chip_steam):
+            ch.setObjectName("chip")
+            ch.setTextFormat(Qt.TextFormat.RichText)
+            ch.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        ra.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        rb.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        ra.addWidget(self.chip_pc)
+        ra.addWidget(self.chip_buddy)
+        rb.addWidget(self.chip_steam)
+        self.time_lbl = QLabel()
+        self.time_lbl.setObjectName("hostSub")
+        rb.addSpacing(4)
+        rb.addWidget(self.time_lbl)
+        rb.addStretch(1)
+        self.chips.addLayout(ra)
+        self.chips.addLayout(rb)
+        self.chips.addStretch(1)
+        root.addLayout(self.chips)
+        self.hint_lbl = QLabel("⚠ " + t("hint_no_buddy"))
+        self.hint_lbl.setObjectName("hostError")
+        self.hint_lbl.setWordWrap(True)
+        self.hint_lbl.setContentsMargins(indent, 0, 0, 0)
+        self.hint_lbl.hide()
+        root.addWidget(self.hint_lbl)
+        self.error_lbl = QLabel()
+        self.error_lbl.setObjectName("hostError")
+        self.error_lbl.setWordWrap(True)
+        self.error_lbl.setContentsMargins(indent, 0, 0, 0)
+        self.error_lbl.hide()
+        root.addWidget(self.error_lbl)
+
+        # --- line 3: action groups ----------------------------------------------
+        self.groups = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.groups.setContentsMargins(indent, 2, 0, 0)
+        self.groups.setSpacing(self.GROUP_GAP)
+        self.action_buttons = {}
+        self._gboxes = []
+        power = []
+        for act in self.POWER:
+            btn = QPushButton(t(act))
+            if act == "wake":
+                btn.setProperty("primary", True)
+            btn.clicked.connect(lambda _, a=act: self.app.do_action(self.host, a))
+            power.append(btn)
+            self.action_buttons[act] = btn
+        self.steam_btn = QPushButton(t("steam_launch"))
+        self.steam_btn.clicked.connect(lambda: self.app.do_action(
+            self.host, "steam_close" if self.steam_running else "steam_launch"))
+        self.action_buttons["steam"] = self.steam_btn
+        for act, b in self.action_buttons.items():
+            b.setProperty("navKey", act)
+        for b in power + [self.steam_btn]:
+            b.setProperty("touchRole", "action")
+            b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)  # never squeezed
+            b.installEventFilter(self.app)
             self.nav_buttons.append(b)
-            layout.addWidget(b)
-        layout.addStretch(1)  # compact mode: keep buttons left-aligned under the name
+        self.groups.addWidget(self._group(t("grp_power"), power), 0, Qt.AlignmentFlag.AlignLeft)
+        self.groups.addWidget(self._group(t("grp_steam"), [self.steam_btn]), 0, Qt.AlignmentFlag.AlignLeft)
+        self.groups.addStretch(1)
+        root.addLayout(self.groups)
+        self.nav_buttons += self.mgmt_buttons
 
         self._apply_row_theme()
+        cached = self.app.host_state.get(host.get("id")) if hasattr(self.app, "host_state") else None
+        if cached:
+            self.result = cached
+        else:
+            self.checking = self.app.cfg.get("settings", {}).get("auto_status", True)
         self._render()
 
-    # --- UI only: responsive layout -----------------------------------------
-    def _btns_width(self) -> int:
-        b = self._btns
-        n = sum(1 for i in range(b.count()) if b.itemAt(i).widget())
-        w = sum(b.itemAt(i).widget().sizeHint().width() for i in range(b.count()) if b.itemAt(i).widget())
-        return w + b.spacing() * max(0, n - 1) + 6  # + the spacer between the groups
+    def _group(self, title: str, buttons: list) -> QWidget:
+        w = QWidget()
+        box = QBoxLayout(QBoxLayout.Direction.LeftToRight, w)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        lbl = QLabel(title)
+        lbl.setObjectName("grpLbl")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        box.addWidget(lbl)
+        h = QHBoxLayout()
+        h.setSpacing(6)
+        for b in buttons:
+            h.addWidget(b)
+        box.addLayout(h)
+        self._gboxes.append((box, lbl, buttons))
+        return w
 
-    def _indent(self) -> int:
-        return self.dot.width() + 4 + self._head.spacing()
+    # --- responsive layout ----------------------------------------------------------
+    def _lock_widths(self):
+        """Buttons never get narrower than their text; the Steam toggle is as wide as
+        its longer label, so it does not jump when the label changes."""
+        self.ensurePolished()
+        for b in self.nav_buttons:
+            b.ensurePolished()
+        sb = self.steam_btn
+        fm = sb.fontMetrics()
+        extra = sb.sizeHint().width() - fm.horizontalAdvance(sb.text())
+        sb.setMinimumWidth(max(fm.horizontalAdvance(t("steam_launch")), fm.horizontalAdvance(t("steam_close"))) + extra)
+        for b in self.nav_buttons[:len(self.POWER)]:
+            b.setMinimumWidth(b.sizeHint().width())
+        lw = max(lbl.sizeHint().width() for _, lbl, _ in self._gboxes)
+        self._lbl_w = lw
+        if not self._compact:
+            for _, lbl, _ in self._gboxes:
+                lbl.setFixedWidth(lw)
+
+    @staticmethod
+    def _bw(b) -> int:
+        return max(b.minimumWidth(), b.sizeHint().width())
+
+    def _line1_width(self) -> int:
+        t1 = self._top
+        icons = len(self.mgmt_buttons) * self.ICON + (len(self.mgmt_buttons) - 1) * t1.spacing() + 14
+        return (self.dot.width() + t1.spacing() + self.name_lbl.minimumWidth() + t1.spacing()
+                + self.ip_lbl.sizeHint().width() + t1.spacing() + icons)
+
+    def _chips_widths(self) -> tuple[int, int]:
+        a = self.chip_pc.sizeHint().width() + 6 + self.chip_buddy.sizeHint().width()
+        b = self.chip_steam.sizeHint().width() + 6 + 4 + max(self.time_lbl.sizeHint().width(), 120)
+        return a, b
+
+    def _group_widths(self) -> list[int]:
+        return [sum(self._bw(b) for b in btns) + 6 * (len(btns) - 1) for _, _, btns in self._gboxes]
 
     def wide_width(self) -> int:
-        # Width needed to show name and all buttons on one line.
-        m = self._outer.contentsMargins()
-        return m.left() + m.right() + self._head.minimumSize().width() + 6 + self._btns_width()
+        """Width needed for the one-line-per-section layout."""
+        self._lock_widths()
+        m = self._root.contentsMargins()
+        ca, cb = self._chips_widths()
+        groups = sum(self._lbl_w + 8 + g for g in self._group_widths()) + self.GROUP_GAP * (len(self._gboxes) - 1)
+        return m.left() + m.right() + max(self._line1_width(), self._indent + ca + 6 + cb, self._indent + groups)
 
     def compact_width(self) -> int:
-        # Smallest sensible width: buttons on their own line, never cut off.
-        m = self._outer.contentsMargins()
-        return m.left() + m.right() + max(self._head.minimumSize().width(), self._indent() + self._btns_width())
+        """Smallest sensible width: groups stacked, chips in two rows, nothing cut off."""
+        self._lock_widths()
+        m = self._root.contentsMargins()
+        ca, cb = self._chips_widths()
+        return m.left() + m.right() + max(self._line1_width(), self._indent + max(ca, cb),
+                                          self._indent + max(self._group_widths() + [self._lbl_w]))
 
     def compact_height(self) -> int:
-        m = self._outer.contentsMargins()
-        bh = max(self.nav_buttons[0].sizeHint().height(), self.nav_buttons[-1].sizeHint().height())
-        return m.top() + m.bottom() + self._head.sizeHint().height() + 8 + bh
+        m = self._root.contentsMargins()
+        sp = self._root.spacing()
+        bh = self.steam_btn.sizeHint().height()
+        lh = max(lbl.sizeHint().height() for _, lbl, _ in self._gboxes)
+        chip_h = self.chip_pc.sizeHint().height()
+        groups = len(self._gboxes) * (lh + 3 + bh) + 6 * (len(self._gboxes) - 1) + 2
+        return m.top() + m.bottom() + self.ICON + sp + 2 * chip_h + 4 + sp + groups
 
     def set_compact(self, on: bool):
         if on == self._compact:
             return
         self._compact = on
-        self._outer.setDirection(QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight)
-        self._outer.setSpacing(8 if on else 6)
-        self._btns.setContentsMargins(self._indent() if on else 0, 0, 0, 0)
-        self._outer.setStretch(0, 0 if on else 1)
+        d = QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight
+        self.groups.setDirection(d)
+        self.groups.setSpacing(6 if on else self.GROUP_GAP)
+        self.chips.setDirection(d)
+        self.chips.setSpacing(4 if on else 6)
+        lw = getattr(self, "_lbl_w", 62)
+        for box, lbl, _ in self._gboxes:      # compact: small label above its buttons
+            box.setDirection(d)
+            box.setSpacing(3 if on else 8)
+            lbl.setMinimumWidth(0 if on else lw)
+            lbl.setMaximumWidth(16777215 if on else lw)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft if on else (Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
 
+    # --- theme / state -------------------------------------------------------------
     def _light(self) -> bool:
         return self.app.cfg.get("settings", {}).get("theme", "Dark") == "Light"
 
@@ -797,36 +907,116 @@ class HostRow(QFrame):
             QFrame#hostCard QLabel#ipPill {{ font-size: 12px; color: {c['pill_t']}; background: {c['pill']}; border-radius: 9px; padding: 1px 8px; }}
             QFrame#hostCard QLabel#hostSub {{ font-size: 13px; color: {c['sub']}; }}
             QFrame#hostCard QLabel#hostError {{ font-size: 13px; color: {c['err']}; }}
+            QFrame#hostCard QLabel#chip {{ font-size: 13px; color: {c['pill_t']}; background: {c['pill']}; border-radius: 10px; padding: 2px 10px; }}
+            QFrame#hostCard QLabel#grpLbl {{ font-size: 11px; font-weight: bold; color: {c['sub']}; letter-spacing: 1px; padding-left: 2px; }}
+            QFrame#hostCard QPushButton[mgmt="true"] {{ font-size: 17px; padding: 0px; min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; }}
         """)
         self._render()
 
+    def _auto(self) -> bool:
+        return self.app.cfg.get("settings", {}).get("auto_status", True)
+
+    def _chip(self, label: QLabel, col: str, text: str):
+        label.setText(f'<span style="color:{col}">●</span>&nbsp;{text}')
+
     def _render(self):
-        """UI only: paint dot and status line from the current UI state."""
-        if not hasattr(self, "dot"):
+        """Paint dot, chips, hint and button states from the current UI state."""
+        if not hasattr(self, "steam_btn"):
             return
         c = ui_colors(self._light())
+        grey = "#b0b0b0" if self._light() else "#8a8a8a"
+        r = self.result
+        pc_on = buddy = False
+        steam = None
+        if r:
+            buddy = bool(r.get("buddy"))
+            pc_on = bool(r.get("ping")) or buddy
+            steam = r.get("steam") if buddy else None
+        # chips
+        if r:
+            if pc_on:
+                self._chip(self.chip_pc, c["online"], t("chip_pc_online") if buddy else t("chip_pc_ping"))
+            else:
+                self._chip(self.chip_pc, c["offline"], t("chip_pc_offline"))
+            if buddy:
+                self._chip(self.chip_buddy, c["online"], t("chip_buddy_ok"))
+            else:
+                self._chip(self.chip_buddy, c["error"] if pc_on else c["offline"], t("chip_buddy_fail"))
+            if steam and steam.get("running"):
+                self._chip(self.chip_steam, c["online"], t("chip_steam_bpm") if steam.get("bpm") else t("chip_steam_running"))
+            elif steam is not None:
+                self._chip(self.chip_steam, c["offline"], t("chip_steam_off"))
+            else:
+                self._chip(self.chip_steam, grey, t("chip_steam_unknown"))
+        else:
+            key = "checking" if self.checking else "unknown"
+            self._chip(self.chip_pc, grey, t(f"chip_pc_{key}"))
+            self._chip(self.chip_buddy, grey, t(f"chip_buddy_{key}"))
+            self._chip(self.chip_steam, grey, t("chip_steam_unknown"))
+        self.steam_running = (bool(steam.get("running")) if steam is not None else None)
+        self.state = ("online" if pc_on else "offline") if r else "unknown"
+        # dot
         if self.busy:
-            col = c["busy"]
+            col = c["cur_b"]          # accent blue: action running
         elif self.failed:
             col = c["error"]
+        elif pc_on and buddy:
+            col = c["online"]
+        elif pc_on:
+            col = c["busy"]          # amber: PC up, Buddy not answering
+        elif r:
+            col = c["offline"]
         else:
-            col = c.get(self.state, c["unknown"])
+            col = c["unknown"]
         self.dot.setStyleSheet(f"background: {col}; border-radius: 7px; border: none;")
+        # time / busy line
+        parts = []
         if self.busy:
-            parts = ["⟳ " + t("working")]
-        else:
-            parts = [self._status_text]
-            if self._checked:
-                parts.append(t("checked_at", time=self._checked))
+            parts.append("⟳ " + t("working"))
+        elif r and r.get("time"):
+            parts.append(t("checked_at", time=r["time"]))
         if not self.host.get("mac"):
             parts.append(t("no_mac_short"))
-        self.status_lbl.setText(" · ".join(parts))
+        self.time_lbl.setText(" · ".join(parts))
+        self.hint_lbl.setVisible(bool(r) and pc_on and not buddy)
+        # Steam toggle label
+        closing = bool(self.steam_running)
+        self.steam_btn.setText(t("steam_close") if closing else t("steam_launch"))
+        self._steam_tip = t("tip_steam_close") if closing else t("tip_steam_launch")
+        self._apply_enabled(r, pc_on, buddy)
 
-    def set_status(self, text: str):
-        self._status_text = text
-        self.state = "online" if text == t("online") else ("offline" if text == t("offline") else "unknown")
-        self._checked = time.strftime("%H:%M:%S")
+    def _apply_enabled(self, r, pc_on: bool, buddy: bool):
+        """Variant A: everything visible; inapplicable actions disabled + not focusable.
+        Without a result (first check pending, or automatic checks off) all stay enabled."""
+        gate = bool(r) and self._auto()
+        want = {}
+        for act, b in self.action_buttons.items():
+            tip = self._steam_tip if act == "steam" else t(f"tip_{act}")
+            if not gate:
+                ok, why = True, ""
+            elif act == "wake":
+                ok, why = not pc_on, t("why_pc_on")
+            else:
+                ok, why = buddy, t("why_no_buddy")
+            want[b] = ok
+            b.setToolTip(tip if ok else f"{tip}\n{why}")
+        fw = QApplication.focusWidget()
+        if fw in want and not want[fw]:
+            # move the focus to the nearest button that stays usable before disabling
+            idx = self.nav_buttons.index(fw)
+            usable = [b for b in self.nav_buttons if want.get(b, True)]
+            if usable:
+                tgt = min(usable, key=lambda b: abs(self.nav_buttons.index(b) - idx))
+                tgt.setFocus(Qt.FocusReason.TabFocusReason)
+        for b, ok in want.items():
+            b.setEnabled(ok)
+            b.setFocusPolicy(Qt.FocusPolicy.StrongFocus if ok else Qt.FocusPolicy.NoFocus)
+
+    def set_result(self, result: dict):
+        self.result = result
+        self.checking = False
         self.failed = False
+        self.error_lbl.hide()
         self._render()
         self.app._update_counts()
 
@@ -1207,11 +1397,19 @@ class InputModeController(QObject):
             if kind == "log":
                 return win.log_btn
             if kind == "host" and hid in win.host_rows:
-                return win.host_rows[hid].nav_buttons[idx]
+                btns = win.host_rows[hid].nav_buttons
+                usable = [b for b in btns if win._navigable(b)]
+                if btns[idx] in usable:
+                    return btns[idx]
+                if usable:   # remembered button got disabled: nearest usable one
+                    return min(usable, key=lambda b: abs(btns.index(b) - idx))
         except (IndexError, RuntimeError):
             pass
-        rows = list(win.host_rows.values())
-        return rows[0].nav_buttons[0] if rows else win.toolbar_buttons[0]
+        for r in win.host_rows.values():
+            for b in r.nav_buttons:
+                if win._navigable(b):
+                    return b
+        return win.toolbar_buttons[0]
 
     @staticmethod
     def _focusable(w, win):
@@ -1561,6 +1759,7 @@ class MainWindow(QMainWindow):
         self.signals.action_done.connect(self.on_action_done)
         self.action_locks: dict[str, threading.Lock] = {}
         self.host_rows: dict[str, HostRow] = {}
+        self.host_state: dict[str, dict] = {}   # last status check per host id (survives refresh_hosts)
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.check_status)
 
@@ -2107,9 +2306,11 @@ class MainWindow(QMainWindow):
         if hid == "__tray__":
             self._update_tray_icon(status == "online")
             return
+        res = {"ping": False, "buddy": status == t("online"), "steam": None, "time": time.strftime("%H:%M:%S")}
+        self.host_state[hid] = res
         row = self.host_rows.get(hid)
         if row:
-            row.set_status(status)
+            row.set_result(res)
 
     def on_action_started(self, hid: str, title: str, action: str):
         self.log_output(f"Running {action} on {title}...")
@@ -2290,14 +2491,33 @@ class MainWindow(QMainWindow):
                 pass
 
     # --- UI only: keyboard/controller navigation -------------------------
+    @staticmethod
+    def _navigable(b) -> bool:
+        try:
+            return b.isEnabled() and not b.isHidden()
+        except RuntimeError:
+            return False
+
     def _nav_grid(self):
+        """Arrow-key/controller grid: one row per toolbar, host card and log button.
+        Disabled buttons are skipped (not focusable)."""
         grid = [self.toolbar_buttons] + [r.nav_buttons for r in self.host_rows.values()] + [[self.log_btn]]
+        grid = [[b for b in row if self._navigable(b)] for row in grid]
         return [row for row in grid if row]
 
     def _focus_first(self):
-        target = next(iter(self.host_rows.values())).nav_buttons[0] if self.host_rows else self.toolbar_buttons[0]
+        target = None
+        for r in self.host_rows.values():
+            target = next((b for b in r.nav_buttons if self._navigable(b)), None)
+            if target:
+                break
+        target = target or self.toolbar_buttons[0]
         target.setFocus(Qt.FocusReason.TabFocusReason)
         self.scroll.ensureWidgetVisible(target)
+
+    @staticmethod
+    def _center_x(w) -> int:
+        return w.mapToGlobal(w.rect().center()).x()
 
     def _ensure_focus(self):
         if self.isVisible() and QApplication.activeModalWidget() is None:
@@ -2323,8 +2543,18 @@ class MainWindow(QMainWindow):
                         elif key == Qt.Key.Key_Right:
                             c = min(len(row) - 1, c + 1)
                         else:
-                            r = max(0, r - 1) if key == Qt.Key.Key_Up else min(len(grid) - 1, r + 1)
-                            c = min(c, len(grid[r]) - 1)
+                            nr = max(0, r - 1) if key == Qt.Key.Key_Up else min(len(grid) - 1, r + 1)
+                            if nr != r:
+                                # card to card: the same button if usable there, else the
+                                # usable button closest in x (also toolbar <-> cards)
+                                nk = obj.property("navKey")
+                                same = [i for i, b in enumerate(grid[nr]) if nk and b.property("navKey") == nk]
+                                if same:
+                                    c = same[0]
+                                else:
+                                    ref = self._center_x(obj)
+                                    c = min(range(len(grid[nr])), key=lambda i: abs(self._center_x(grid[nr][i]) - ref))
+                            r = nr
                         target = grid[r][c]
                         target.setFocus(Qt.FocusReason.TabFocusReason)
                         self.scroll.ensureWidgetVisible(target)
