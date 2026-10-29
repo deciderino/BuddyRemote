@@ -68,5 +68,8 @@
   "tip_add": "Host hinzufügen (Strg+N)",
   "tip_refresh": "Status aller Hosts jetzt prüfen (F5)",
   "tip_options": "Einstellungen (Strg+,)",
-  "tip_log": "Log ein-/ausblenden (Strg+L)"
+  "tip_log": "Log ein-/ausblenden (Strg+L)",
+  "prefer_x11": "Fensterposition merken (X11-Modus)",
+  "prefer_x11_tip": "Unter Wayland dürfen Apps ihre Fensterposition nicht selbst wiederherstellen. Im X11-Modus (XWayland) wird die Position gemerkt, das Fenster kann bei gebrochener Skalierung aber unscharf wirken. Wirkt nach einem Neustart.",
+  "restart_needed": "BuddyRemote neu starten, um den Fenstermodus zu übernehmen."
 }

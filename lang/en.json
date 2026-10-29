@@ -68,5 +68,8 @@
   "tip_add": "Add a host (Ctrl+N)",
   "tip_refresh": "Check status of all hosts now (F5)",
   "tip_options": "Settings (Ctrl+,)",
-  "tip_log": "Show or hide the log (Ctrl+L)"
+  "tip_log": "Show or hide the log (Ctrl+L)",
+  "prefer_x11": "Remember window position (X11 mode)",
+  "prefer_x11_tip": "Wayland does not let apps restore their window position. In X11 mode (XWayland) the position is remembered, but the window may look blurry with fractional scaling. Takes effect after a restart.",
+  "restart_needed": "Restart BuddyRemote to apply the window mode."
 }

@@ -91,6 +91,34 @@ def t(key, **kw):
         return s
 
 
+def wayland_session() -> bool:
+    return bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get("XDG_SESSION_TYPE") == "wayland"
+
+
+def prefer_x11_enabled() -> bool:
+    """Opt-in, default off: BUDDYREMOTE_X11=1/0 or prefer_x11 in window.ini."""
+    env = os.environ.get("BUDDYREMOTE_X11")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "yes", "on")
+    try:
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        return str(st.value("prefer_x11", "false")).lower() == "true"
+    except Exception:
+        return False
+
+
+def apply_platform_preference():
+    """UI only, before QApplication: Wayland does not let apps place their own
+    window, so the saved position cannot be restored there. If the user opted in,
+    use the X11 (XWayland) backend instead. An explicit QT_QPA_PLATFORM always wins."""
+    if os.environ.get("QT_QPA_PLATFORM"):
+        return
+    if not (wayland_session() and os.environ.get("DISPLAY")):
+        return
+    if prefer_x11_enabled():
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+
 def touch_css(light: bool) -> str:
     """UI only: larger touch/TV-friendly controls and a clearly visible focus ring.
     Appended after each theme stylesheet so it overrides sizes, not colors."""
@@ -894,6 +922,15 @@ class OptionsDialog(QDialog):
         self.tray_color.setChecked(settings.get("tray_color_change", True))
         layout.addRow(self.tray_color)
 
+        # Opt-in prototype (UI/window handling only, stored in window.ini, not config.json):
+        # on a Wayland desktop, run through XWayland so the window position can be restored.
+        self.prefer_x11 = None
+        if wayland_session():
+            self.prefer_x11 = QCheckBox(t("prefer_x11"))
+            self.prefer_x11.setToolTip(t("prefer_x11_tip"))
+            self.prefer_x11.setChecked(prefer_x11_enabled())
+            layout.addRow(self.prefer_x11)
+
         self.theme = QComboBox()
         self.theme.addItems(["Dark", "Light"])
         self.theme.setCurrentText(settings.get("theme", "Dark"))
@@ -930,6 +967,19 @@ class OptionsDialog(QDialog):
         layout.addRow(btns)
         install_dialog_nav(self)
         fit_dialog_to_screen(self)
+
+    def accept(self):
+        # UI only: persist the opt-in X11 window mode (takes effect after a restart)
+        if self.prefer_x11 is not None and self.prefer_x11.isChecked() != prefer_x11_enabled():
+            try:
+                st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+                st.setValue("prefer_x11", "true" if self.prefer_x11.isChecked() else "false")
+                st.sync()
+                par = self.parent()  # shown after the "Settings saved" toast
+                QTimer.singleShot(3200, lambda: notify(par, t("restart_needed"), kind="ok"))
+            except Exception:
+                logging.exception("window state save failed")
+        super().accept()
 
     def _do_verify(self):
         ok, msg = verify_existing_cli()
@@ -1873,6 +1923,7 @@ def main():
     # being rounded to whole numbers. This is already the Qt 6 default; set explicitly
     # so it stays that way (all sizes in the stylesheets are device-independent px).
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    apply_platform_preference()
     app = QApplication(sys.argv)
     app.setApplicationName("BuddyRemote")
     # Apply theme to all dialogs
