@@ -68,5 +68,22 @@
   "tip_add": "Add a host (Ctrl+N)",
   "tip_refresh": "Check status of all hosts now (F5)",
   "tip_options": "Settings (Ctrl+,)",
-  "tip_log": "Show or hide the log (Ctrl+L)"
+  "tip_log": "Show or hide the log (Ctrl+L)",
+  "theme": "Theme",
+  "language": "Language",
+  "lang_auto": "Automatic (system language)",
+  "lang_de": "Deutsch",
+  "lang_en": "English",
+  "language_restart": "Language changed. Takes effect after a restart.",
+  "about": "About",
+  "about_title": "About BuddyRemote",
+  "about_thanks": "Thanks to the MoonDeck project:",
+  "tray_show": "Show",
+  "tray_hosts": "Hosts",
+  "tray_quit": "Quit",
+  "tray_no_hosts": "(no hosts)",
+  "pair_now": "Pair with this host now?",
+  "attribution": "This app uses the MoonDeck CLI by FrogTheFrog.\n\nhttps://github.com/FrogTheFrog/moondeck\n\nThank you for the great work!",
+  "running_in_background": "Running in background",
+  "cli_download_failed": "Failed to download MoonDeck CLI.\nCheck your internet connection and try again."
 }

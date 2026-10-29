@@ -5,7 +5,7 @@
     "auto_status": true,
     "logging": false,
     "start_minimized": false,
-    "language": "en",
+    "language": "auto",
     "autostart": false,
     "confirm_actions": true
   },

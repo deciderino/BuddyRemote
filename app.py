@@ -83,6 +83,29 @@ def load_lang(code="en") -> dict:
     except Exception:
         return {}
 
+LANGUAGES = ("de", "en")
+
+def system_language() -> str:
+    """'de' if the system locale is German, otherwise 'en'."""
+    try:
+        from PyQt6.QtCore import QLocale
+        return "de" if QLocale.system().name().lower().startswith("de") else "en"
+    except Exception:
+        return "en"
+
+def resolve_language(settings: dict) -> str:
+    """Language from settings.language: 'de', 'en' or 'auto' (system locale).
+    Before 1.2 the setting had no UI and every config said "en" without being used,
+    so an "en" that was never chosen in Options counts as 'auto'."""
+    code = (settings or {}).get("language", "auto")
+    if code == "en" and not (settings or {}).get("language_set"):
+        code = "auto"
+    return code if code in LANGUAGES else system_language()
+
+def set_language(code: str):
+    global L
+    L = load_lang(code)
+
 L = load_lang()
 def t(key, **kw):
     s = L.get(key, key)
@@ -304,7 +327,7 @@ DEFAULT_CONFIG = {
         "auto_status": True,
         "logging": False,
         "start_minimized": True,
-        "language": "en",
+        "language": "auto",
         "autostart": False,
         "confirm_actions": True,
         "tray_color_change": True,
@@ -900,9 +923,18 @@ class OptionsDialog(QDialog):
         self.theme = QComboBox()
         self.theme.addItems(["Dark", "Light"])
         self.theme.setCurrentText(settings.get("theme", "Dark"))
-        layout.addRow("Theme", self.theme)
+        layout.addRow(t("theme"), self.theme)
 
-        about_btn = QPushButton("About")
+        self.language = QComboBox()
+        for code, key in (("auto", "lang_auto"), ("de", "lang_de"), ("en", "lang_en")):
+            self.language.addItem(t(key), code)
+        cur = settings.get("language", "auto")
+        if cur == "en" and not settings.get("language_set"):
+            cur = "auto"
+        self.language.setCurrentIndex(max(0, self.language.findData(cur)))
+        layout.addRow(t("language"), self.language)
+
+        about_btn = QPushButton(t("about"))
         about_btn.clicked.connect(lambda: parent.show_about() if parent else None)
         layout.addRow(about_btn)
 
@@ -963,7 +995,9 @@ class OptionsDialog(QDialog):
             "autostart": self.autostart.isChecked(),
             "confirm_actions": self.confirm.isChecked(),
             "tray_color_change": self.tray_color.isChecked(),
-            "theme": self.theme.currentText()
+            "theme": self.theme.currentText(),
+            "language": self.language.currentData(),
+            "language_set": True,
         }
 
 # ---------------------------------------------------------------------------
@@ -1405,12 +1439,12 @@ class MainWindow(QMainWindow):
     def show_about(self):
         box = QMessageBox(self)
         box.setStyleSheet(dialog_stylesheet(self))
-        box.setWindowTitle("About BuddyRemote")
+        box.setWindowTitle(t("about_title"))
         box.setTextFormat(Qt.TextFormat.RichText)
         box.setText(
             "BuddyRemote v1.0<br><br>"
             "by Diciderino<br><br>"
-            "Thanks to the MoonDeck project:<br>"
+            + t("about_thanks") + "<br>"
             '<a href="https://github.com/FrogTheFrog/moondeck">https://github.com/FrogTheFrog/moondeck</a>'
         )
         box.exec()
@@ -1534,11 +1568,11 @@ class MainWindow(QMainWindow):
         self._update_tray_icon(False)
         self.tray.setToolTip("BuddyRemote")
         menu = QMenu()
-        menu.addAction("Show", self.show_normal)
+        menu.addAction(t("tray_show"), self.show_normal)
         menu.addSeparator()
-        self.host_menu = menu.addMenu("Hosts")
+        self.host_menu = menu.addMenu(t("tray_hosts"))
         menu.addSeparator()
-        menu.addAction("Quit", self.quit_app)
+        menu.addAction(t("tray_quit"), self.quit_app)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self.tray_activated)
         self.tray.show()
@@ -1663,15 +1697,13 @@ class MainWindow(QMainWindow):
         self.host_menu.clear()
         hosts = self.cfg.get("hosts", [])
         if not hosts:
-            self.host_menu.addAction("(no hosts)").setEnabled(False)
+            self.host_menu.addAction(t("tray_no_hosts")).setEnabled(False)
             return
         for h in hosts:
             name = h.get("name", h.get("ip", "?"))
             sub = self.host_menu.addMenu(name)
-            sub.addAction("Wake", lambda _, host=h: self.do_action(host, "wake"))
-            sub.addAction("Shutdown", lambda _, host=h: self.do_action(host, "shutdown"))
-            sub.addAction("Restart", lambda _, host=h: self.do_action(host, "restart"))
-            sub.addAction("Suspend", lambda _, host=h: self.do_action(host, "suspend"))
+            for act in ("wake", "shutdown", "restart", "suspend"):
+                sub.addAction(t(act), lambda _, host=h, a=act: self.do_action(host, a))
 
     def refresh_hosts(self):
         # clear
@@ -1711,7 +1743,7 @@ class MainWindow(QMainWindow):
                 save_config(self.cfg)
                 self.refresh_hosts()
                 self._update_tray_menu()
-                if QMessageBox.question(self, t("pairing_title"), "Pair with this host now?") == QMessageBox.StandardButton.Yes:
+                if QMessageBox.question(self, t("pairing_title"), t("pair_now")) == QMessageBox.StandardButton.Yes:
                     self.start_pairing(data)
 
     def edit_host(self, host: dict):
@@ -1974,6 +2006,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             new = dlg.get_settings()
             theme_changed = new.get("theme") != self.cfg["settings"].get("theme")
+            lang_changed = resolve_language(new) != resolve_language(self.cfg["settings"])
             self.cfg["settings"].update(new)
             save_config(self.cfg)
             setup_logging(new["logging"])
@@ -1983,7 +2016,8 @@ class MainWindow(QMainWindow):
             else:
                 self.status_timer.stop()
             self._update_status_bar()
-            notify(self, t("settings_saved"), t("theme_restart") if theme_changed else "", kind="ok")
+            hints = ([t("theme_restart")] if theme_changed else []) + ([t("language_restart")] if lang_changed else [])
+            notify(self, t("settings_saved"), "\n".join(hints), kind="ok")
 
     def _make_tray_icon(self, online: bool) -> QIcon:
         pix = QPixmap(22, 22)
@@ -2018,13 +2052,7 @@ class MainWindow(QMainWindow):
         logging.info(text.strip())
 
     def _show_attribution(self):
-        QMessageBox.information(
-            self,
-            "BuddyRemote",
-            "This app uses the MoonDeck CLI by FrogTheFrog.\n\n"
-            "https://github.com/FrogTheFrog/moondeck\n\n"
-            "Thank you for the great work!"
-        )
+        QMessageBox.information(self, "BuddyRemote", t("attribution"))
         (APP_DIR / ".attributed").touch()
 
     def show_normal(self):
@@ -2269,7 +2297,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         event.ignore()
         self.hide()
-        self.tray.showMessage("BuddyRemote", "Running in background", QSystemTrayIcon.MessageIcon.Information, 2000)
+        self.tray.showMessage("BuddyRemote", t("running_in_background"), QSystemTrayIcon.MessageIcon.Information, 2000)
 
 # ---------------------------------------------------------------------------
 class DownloadDialog(QDialog):
@@ -2306,6 +2334,7 @@ def main():
     app.setApplicationName("BuddyRemote")
     # Apply theme to all dialogs
     cfg = load_config()
+    set_language(resolve_language(cfg.get("settings", {})))
     light = cfg.get("settings", {}).get("theme", "Dark") == "Light"
     if light:
         app.setStyleSheet("""
@@ -2343,7 +2372,7 @@ def main():
         ok = download_cli(dlg.set_status)
         dlg.close()
         if not ok:
-            QMessageBox.critical(None, "BuddyRemote", "Failed to download MoonDeck CLI.\nCheck your internet connection and try again.")
+            QMessageBox.critical(None, "BuddyRemote", t("cli_download_failed"))
             sys.exit(1)
 
     win = MainWindow()
