@@ -1,6 +1,7 @@
 #!/bin/bash
 # Build BuddyRemote-x86_64.AppImage (PyInstaller onedir + appimagetool).
-# Usage: packaging/linux/build-appimage.sh   (run from repo root, inside a venv with pyinstaller + PyQt6)
+# Usage: packaging/linux/build-appimage.sh   (run from repo root, inside a venv with pyinstaller + PyQt6
+#        + PySDL2 + pysdl2-dll; pysdl2-dll only provides the prebuilt libSDL2 that gets bundled)
 # Env: MOONDECK_CLI=/path/to/moondeck-cli-linux.bin  (bundled CLI, required)
 #      MOONDECK_CLI_SHA256=<sha>                      (pinned checksum, required)
 #      APPIMAGETOOL=/path/to/appimagetool
@@ -13,11 +14,14 @@ APPIMAGETOOL="${APPIMAGETOOL:-appimagetool}"
 echo "$MOONDECK_CLI_SHA256  $MOONDECK_CLI" | sha256sum -c -
 
 rm -rf build dist/BuddyRemote AppDir
-mkdir -p build/bundled build/licenses
+mkdir -p build/bundled build/licenses build/libsdl2
 cp "$MOONDECK_CLI" build/bundled/moondeck-cli && chmod 755 build/bundled/moondeck-cli
 cp "$PKG"/licenses/* build/licenses/
 cp LICENSE build/licenses/BuddyRemote-GPL-3.0.txt
 SP="$(python -c 'import site;print(site.getsitepackages()[0])')"
+# Gamepad: only libSDL2 (zlib) from the pysdl2-dll wheel is bundled, not SDL2_mixer/image/ttf/gfx
+cp "$SP"/sdl2dll/dll/libSDL2-2.0.so build/libsdl2/
+python -c 'import sdl2dll;print("libSDL2 from pysdl2-dll", sdl2dll.__version__)' > build/licenses/SDL2-version.txt
 cp "$SP"/pyqt6-*.dist-info/licenses/LICENSE build/licenses/PyQt6-GPL-3.0.txt
 cp "$SP"/pyqt6_qt6-*.dist-info/LICENSE build/licenses/Qt6-LGPL-3.0.txt
 cp "$SP"/pyqt6_sip-*.dist-info/licenses/LICENSE build/licenses/PyQt6-sip-BSD-2-Clause.txt

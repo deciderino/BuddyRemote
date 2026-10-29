@@ -3,6 +3,9 @@
 # (glibc, libstdc++, X11/xcb, Wayland, GL, fontconfig, glib, dbus ...) are taken
 # from the target distro, except the xcb-util libs from EXTRA_LIBS_DIR
 # (Ubuntu 22.04 builds), which Qt's xcb plugin needs and many distros lack.
+# Gamepad: the PySDL2 bindings (pure Python, public domain/zlib) go into the PYZ and
+# libSDL2 (zlib) from build/libsdl2 goes to <bundle>/libsdl2, where app.py points
+# PYSDL2_DLL_PATH. The pysdl2-dll wrapper package (sdl2dll) itself is not shipped.
 import os, sys
 ROOT = os.environ["BR_ROOT"]
 BUILD = os.path.join(ROOT, "build")
@@ -12,13 +15,17 @@ KEEP_PREFIXES = tuple(os.path.realpath(p) for p in {sys.prefix, sys.base_prefix,
 a = Analysis(
     [os.path.join(ROOT, "app.py")],
     pathex=[ROOT],
+    binaries=[
+        (os.path.join(BUILD, "libsdl2", "libSDL2-2.0.so"), "libsdl2"),
+    ],
+    hiddenimports=["sdl2"],
     datas=[
         (os.path.join(ROOT, "lang"), "lang"),
         (os.path.join(ROOT, "config.json"), "."),
         (os.path.join(BUILD, "bundled"), "bundled"),
         (os.path.join(BUILD, "licenses"), "licenses"),
     ],
-    excludes=["tkinter"],
+    excludes=["tkinter", "sdl2dll", "sdl2.ext", "numpy", "PIL"],
 )
 
 def _keep(entry):
