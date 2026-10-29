@@ -549,7 +549,8 @@ StartupWMClass=BuddyRemote
 # ---------------------------------------------------------------------------
 class Signals(QObject):
     status_update = pyqtSignal(str, str)  # host_id, status_text
-    action_done = pyqtSignal(str, bool, str)  # title, success, message
+    action_started = pyqtSignal(str, str, str)  # host_id, name, action
+    action_done = pyqtSignal(str, str, str, bool, str)  # host_id, name, action, success, message
 
 # ---------------------------------------------------------------------------
 # UI only: colours for the main window (cards, status dots, toasts, status bar)
@@ -1459,6 +1460,7 @@ class MainWindow(QMainWindow):
         setup_logging(self.cfg["settings"].get("logging", False))
         self.signals = Signals()
         self.signals.status_update.connect(self.on_status_update)
+        self.signals.action_started.connect(self.on_action_started)
         self.signals.action_done.connect(self.on_action_done)
         self.action_locks: dict[str, threading.Lock] = {}
         self.host_rows: dict[str, HostRow] = {}
@@ -1821,13 +1823,13 @@ class MainWindow(QMainWindow):
 
         def worker():
             try:
-                self.signals.action_done.emit(name, False, "running")  # signal start
+                self.signals.action_started.emit(hid, name, action)
                 rc, out, err = self._run_action(host, action)
                 msg = (out or err or f"Exit {rc}").strip()
                 success = rc == 0
-                self.signals.action_done.emit(name, success, msg)
+                self.signals.action_done.emit(hid, name, action, success, msg)
             except Exception as e:
-                self.signals.action_done.emit(name, False, str(e))
+                self.signals.action_done.emit(hid, name, action, False, str(e))
             finally:
                 self.action_locks[hid].release()
 
@@ -1980,25 +1982,23 @@ class MainWindow(QMainWindow):
         if row:
             row.set_status(status)
 
-    def _rows_named(self, title: str):
-        """UI only: rows whose display name matches an action_done title."""
-        return [r for r in self.host_rows.values() if r.host.get("name", r.host.get("ip")) == title]
+    def on_action_started(self, hid: str, title: str, action: str):
+        self.log_output(f"Running {action} on {title}...")
+        self.status_bar.setText(f"Working...")
+        r = self.host_rows.get(hid)
+        if r:
+            r.set_busy(True)
 
-    def on_action_done(self, title: str, success: bool, msg: str):
-        if msg == "running":
-            self.log_output(f"Running action on {title}...")
-            self.status_bar.setText(f"Working...")
-            for r in self._rows_named(title):
-                r.set_busy(True)
-            return
+    def on_action_done(self, hid: str, title: str, action: str, success: bool, msg: str):
         self.status_bar.setText("")
-        self.log_output(f"[{title}] {'OK' if success else 'FAIL'}: {msg}")
-        for r in self._rows_named(title):
+        self.log_output(f"[{title}] {action} {'OK' if success else 'FAIL'}: {msg}")
+        r = self.host_rows.get(hid)
+        if r:
             if success:
                 r.set_busy(False)
             else:
                 r.set_failed(t("action_failed", title=title) + " " + (msg.splitlines()[0][:120] if msg else ""))
-        if success and "wake" in title.lower():
+        if success and action == "wake":
             notify(self, t("wake_sent"), kind="ok")
         elif success:
             notify(self, t("action_ok", title=title), kind="ok")
