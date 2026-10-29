@@ -34,7 +34,8 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QAbstractButton, QStatusBar, QBoxLayout, QSizePolicy,
     QAbstractSpinBox
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator
 
 APP_VERSION = "1.2"
@@ -52,7 +53,7 @@ CLI_DIR = APP_DIR / "cli"
 CLI_BIN = CLI_DIR / "moondeck-cli"
 CLI_SCRIPT = CLI_DIR / "cli.py"  # fallback
 LANG_DIR = RES_DIR / "lang"
-LOCK_FILE = APP_DIR / ".lock"
+INSTANCE_LOCK = APP_DIR / ".instance.lock"
 LOG_FILE = APP_DIR / "buddyremote.log"
 WINDOW_STATE_FILE = APP_DIR / "window.ini"  # UI only: size/maximized/position
 
@@ -407,18 +408,68 @@ def check_buddy_api(ip: str, port: int = 59999, timeout=5.0) -> tuple[bool, str]
     except Exception as e:
         return False, str(e)
 
+# Single instance: a QLockFile in APP_DIR (Qt detects stale locks of dead processes
+# itself) plus a QLocalServer, through which a second start asks the running
+# instance to show its window. Only the process holding the lock ever releases it.
+_instance_lock: QLockFile | None = None
+_instance_server: QLocalServer | None = None
+
+def instance_server_name() -> str:
+    try:
+        user = os.getlogin()
+    except OSError:
+        user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
+    tag = hashlib.sha1(str(APP_DIR).encode()).hexdigest()[:8]
+    return f"BuddyRemote-{user}-{tag}"
+
 def acquire_lock() -> bool:
-    if LOCK_FILE.exists():
-        try:
-            os.kill(int(LOCK_FILE.read_text().strip()), 0)
-            return False
-        except (OSError, ValueError):
-            pass
-    LOCK_FILE.write_text(str(os.getpid()))
+    """True if this process is the only running instance (for this APP_DIR)."""
+    global _instance_lock
+    lock = QLockFile(str(INSTANCE_LOCK))
+    lock.setStaleLockTime(0)   # never treat a live instance's lock as stale by age
+    if lock.tryLock(200):
+        _instance_lock = lock
+        return True
+    return False
+
+def notify_running_instance() -> bool:
+    """Ask the already running instance to bring its window to the front."""
+    sock = QLocalSocket()
+    sock.connectToServer(instance_server_name())
+    if not sock.waitForConnected(1000):
+        return False
+    sock.write(b"show\n")
+    sock.flush()
+    sock.waitForBytesWritten(1000)
+    sock.disconnectFromServer()
+    return True
+
+def start_instance_server(on_show) -> bool:
+    """Primary instance: listen for 'show' requests from later starts."""
+    global _instance_server
+    name = instance_server_name()
+    QLocalServer.removeServer(name)   # leftover socket of a crashed run; we hold the lock
+    server = QLocalServer()
+    def _on_conn():
+        while server.hasPendingConnections():
+            c = server.nextPendingConnection()
+            c.readyRead.connect(lambda c=c: (c.readAll(), on_show()))
+            c.disconnected.connect(c.deleteLater)
+    server.newConnection.connect(_on_conn)
+    if not server.listen(name):
+        logging.warning("Single instance server failed: %s", server.errorString())
+        return False
+    _instance_server = server
     return True
 
 def release_lock():
-    LOCK_FILE.unlink(missing_ok=True)
+    global _instance_lock, _instance_server
+    if _instance_server is not None:
+        _instance_server.close()
+        _instance_server = None
+    if _instance_lock is not None:
+        _instance_lock.unlock()
+        _instance_lock = None
 
 def verify_existing_cli() -> tuple[bool, str]:
     """Re-check the already downloaded CLI against the current GitHub digest."""
@@ -2093,6 +2144,16 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def bring_to_front(self):
+        """Another start of BuddyRemote asked us to show the window."""
+        if self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        if self.isVisible():
+            self.raise_()
+            self.activateWindow()
+        else:
+            self.show_normal()
+
     def tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             if self.isVisible():
@@ -2354,9 +2415,6 @@ class DownloadDialog(QDialog):
 
 def main():
     prepare_packaged_dir()
-    if not acquire_lock():
-        print("BuddyRemote is already running.")
-        sys.exit(0)
 
     # UI only: fractional display scaling (125 %, 150 %, ...) is used as-is instead of
     # being rounded to whole numbers. This is already the Qt 6 default; set explicitly
@@ -2364,6 +2422,12 @@ def main():
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setApplicationName("BuddyRemote")
+    if not acquire_lock():
+        if notify_running_instance():
+            print("BuddyRemote is already running - showing its window.")
+        else:
+            print("BuddyRemote is already running.")
+        sys.exit(0)
     # Apply theme to all dialogs
     cfg = load_config()
     set_language(resolve_language(cfg.get("settings", {})))
@@ -2408,6 +2472,7 @@ def main():
             sys.exit(1)
 
     win = MainWindow()
+    start_instance_server(win.bring_to_front)
     if not win.cfg["settings"].get("start_minimized", True):
         win.show()
     sys.exit(app.exec())
