@@ -127,5 +127,22 @@
   "chip_steam_unknown": "Steam: unbekannt",
   "hint_no_buddy": "PC läuft, aber MoonDeck Buddy antwortet nicht. Ist Buddy gestartet?",
   "why_pc_on": "Nicht verfügbar: Der PC ist bereits an.",
-  "why_no_buddy": "Nicht verfügbar: MoonDeck Buddy ist nicht erreichbar."
+  "why_no_buddy": "Nicht verfügbar: MoonDeck Buddy ist nicht erreichbar.",
+  "check_updates": "Beim Start nach Updates suchen",
+  "check_updates_now": "Jetzt nach Updates suchen",
+  "updates_row": "Updates:",
+  "update_checking": "Prüfe…",
+  "update_never": "Noch nicht geprüft",
+  "update_last_checked": "Zuletzt geprüft: {when} – {result}",
+  "update_res_current": "aktuell",
+  "update_res_newer": "{version} verfügbar",
+  "update_res_error": "fehlgeschlagen (offline?)",
+  "update_available": "Neue Version {version} verfügbar",
+  "update_detail": "Du nutzt {current}. Es wird nichts automatisch heruntergeladen.",
+  "update_download": "Download",
+  "update_current": "BuddyRemote {version} ist aktuell",
+  "update_failed": "Update-Prüfung fehlgeschlagen",
+  "today": "heute",
+  "date_fmt": "%d.%m.%Y %H:%M",
+  "close": "Schließen"
 }

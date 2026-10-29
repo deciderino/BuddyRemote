@@ -34,9 +34,9 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QAbstractButton, QStatusBar, QBoxLayout, QSizePolicy,
     QAbstractSpinBox
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile, QUrl
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
-from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator
+from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices
 
 APP_VERSION = "1.2"
 
@@ -336,6 +336,7 @@ DEFAULT_CONFIG = {
         "autostart": False,
         "confirm_actions": True,
         "tray_color_change": True,
+        "check_updates": True,
         "client_id": "",
         "theme": "Dark",
         "cli_verified": False,
@@ -444,6 +445,39 @@ def parse_steam_status(out: str) -> dict | None:
     if not isinstance(st, dict) or "running" not in st:
         return None
     return {"running": bool(st.get("running")), "bpm": bool(st.get("bpm"))}
+
+# Update check: only reads the latest GitHub release; nothing is downloaded.
+RELEASES_API = "https://api.github.com/repos/deciderino/BuddyRemote/releases/latest"
+
+def version_tuple(v: str) -> tuple[int, ...]:
+    """'v1.2' / '1.10.0' / '1.3-beta' -> (1, 2) / (1, 10) / (1, 3); trailing zeros dropped."""
+    import re
+    m = re.match(r"\s*[vV]?\s*(\d+(?:\.\d+)*)", v or "")
+    if not m:
+        return ()
+    parts = [int(x) for x in m.group(1).split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+def is_newer_version(remote: str, local: str = APP_VERSION) -> bool:
+    r = version_tuple(remote)
+    return bool(r) and r > version_tuple(local)
+
+def fetch_latest_release(timeout: float = 5.0) -> dict:
+    """{'version', 'url', 'name'} of the latest release; raises on any problem."""
+    req = urllib.request.Request(RELEASES_API, headers={
+        "User-Agent": f"BuddyRemote/{APP_VERSION} (+https://github.com/deciderino/BuddyRemote)",
+        "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8", errors="replace"))
+    tag = str(data.get("tag_name") or "")
+    if not version_tuple(tag):
+        raise ValueError(f"no version in tag {tag!r}")
+    url = str(data.get("html_url") or "")
+    if not url.startswith("https://github.com/"):
+        url = "https://github.com/deciderino/BuddyRemote/releases/latest"
+    return {"version": tag.lstrip("vV").strip(), "url": url, "name": str(data.get("name") or tag)}
 
 def check_buddy_api(ip: str, port: int = 59999, timeout=5.0) -> tuple[bool, str]:
     """Direct HTTPS check to Buddy, ignoring self-signed cert. Returns (ok, message)."""
@@ -653,6 +687,7 @@ StartupWMClass=BuddyRemote
 class Signals(QObject):
     status_update = pyqtSignal(str, str)  # host_id, status_text
     host_status = pyqtSignal(str, dict)   # host_id, result of MainWindow._check_host
+    update_result = pyqtSignal(dict)      # result of MainWindow.check_for_updates
     action_started = pyqtSignal(str, str, str)  # host_id, name, action
     action_done = pyqtSignal(str, str, str, bool, str)  # host_id, name, action, success, message
 
@@ -1155,6 +1190,80 @@ class Toast(QFrame):
     def mousePressEvent(self, ev):
         self.hide()
 
+class UpdateToast(QFrame):
+    """Blue info toast (bottom right) for a new release: [Download] opens the
+    release page in the browser, ✕ closes. Stays about 30 s."""
+    def __init__(self, parent, on_download):
+        super().__init__(parent)
+        self.setObjectName("utoast")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 10, 10, 10)
+        lay.setSpacing(10)
+        txt = QVBoxLayout()
+        txt.setSpacing(2)
+        self.title = QLabel()
+        self.title.setObjectName("toastTitle")
+        self.title.setWordWrap(True)
+        self.detail = QLabel()
+        self.detail.setObjectName("toastDetail")
+        self.detail.setWordWrap(True)
+        txt.addWidget(self.title)
+        txt.addWidget(self.detail)
+        lay.addLayout(txt, 1)
+        self.dl_btn = QPushButton(t("update_download"))
+        self.dl_btn.setObjectName("toastBtn")
+        self.dl_btn.clicked.connect(on_download)
+        self.x_btn = QPushButton("✕")
+        self.x_btn.setObjectName("toastX")
+        self.x_btn.setToolTip(t("close"))
+        self.x_btn.setFixedSize(48, 48)
+        self.x_btn.clicked.connect(self.hide)
+        lay.addWidget(self.dl_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self.x_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.buttons = [self.dl_btn, self.x_btn]
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.hide)
+        self.hide()
+
+    def show_update(self, version: str, light: bool, ms: int = 30000):
+        if light:
+            bg, b, fg, dim, btn, btn_b = "#e3f2fd", "#1565c0", "#0d47a1", "#37474f", "#1565c0", "#0d47a1"
+        else:
+            bg, b, fg, dim, btn, btn_b = "#1b2d3a", "#4fc3f7", "#e6e6e6", "#a8c4d4", "#1f5f8b", "#2a7ab0"
+        self.setStyleSheet(f"""
+            QFrame#utoast {{ background: {bg}; border: 1px solid {b}; border-radius: 8px; }}
+            QFrame#utoast QLabel {{ background: transparent; border: none; color: {fg}; }}
+            QLabel#toastTitle {{ font-size: 14px; font-weight: bold; }}
+            QLabel#toastDetail {{ font-size: 13px; color: {dim}; }}
+            QPushButton#toastBtn {{ background: {btn}; color: #fff; border: 2px solid {btn_b}; min-width: 80px; }}
+            QPushButton#toastBtn:focus {{ border: 2px solid #ffffff; }}
+            QPushButton#toastX {{ background: transparent; color: {dim}; border: 2px solid transparent; min-width: 0px; min-height: 0px; padding: 0px; font-size: 16px; }}
+            QPushButton#toastX:focus {{ border: 2px solid {b}; }}
+        """)
+        self.title.setText("ℹ  " + t("update_available", version=version))
+        self.detail.setText(t("update_detail", current=APP_VERSION))
+        self.place()
+        self.show()
+        self.raise_()
+        self.timer.start(ms)
+
+    def place(self):
+        par = self.parentWidget()
+        if not par:
+            return
+        w = min(460, max(260, par.width() - 28))
+        self.setFixedWidth(w)
+        self.adjustSize()
+        bottom = getattr(par.window(), "_toast_base_bottom", lambda: par.height() - 14)()
+        self.move(par.width() - w - 14, bottom - self.height())
+
+    def hideEvent(self, ev):
+        super().hideEvent(ev)
+        win = self.window()
+        if hasattr(win, "toast") and win.toast.isVisible():
+            win.toast.place()          # the normal toast moves back down
+
 # ---------------------------------------------------------------------------
 class HostDialog(QDialog):
     def __init__(self, host: dict | None, parent=None):
@@ -1266,6 +1375,10 @@ class OptionsDialog(QDialog):
         self.tray_color.setChecked(settings.get("tray_color_change", True))
         layout.addRow(self.tray_color)
 
+        self.check_updates = QCheckBox(t("check_updates"))
+        self.check_updates.setChecked(settings.get("check_updates", True))
+        layout.addRow(self.check_updates)
+
         self.theme = QComboBox()
         self.theme.addItems(["Dark", "Light"])
         self.theme.setCurrentText(settings.get("theme", "Dark"))
@@ -1280,11 +1393,27 @@ class OptionsDialog(QDialog):
         self.language.setCurrentIndex(max(0, self.language.findData(cur)))
         layout.addRow(t("language"), self.language)
 
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        light = settings.get("theme", "Dark") == "Light"
+        cc = ui_colors(light)
+        sep.setStyleSheet(f"color: {cc['card_b']}; background: {cc['card_b']}; max-height: 1px; border: none;")
+        layout.addRow(sep)
         layout.addRow(t("app_version"), QLabel(APP_VERSION))
+        self.update_lbl = QLabel(parent.update_status_text() if parent and hasattr(parent, "update_status_text") else "")
+        self.update_lbl.setStyleSheet(f"color: {cc['sub']}; font-size: 13px;")
+        self.update_lbl.setWordWrap(True)
+        layout.addRow(t("updates_row"), self.update_lbl)
 
         about_btn = QPushButton(t("about"))
         about_btn.clicked.connect(lambda: parent.show_about() if parent else None)
-        layout.addRow(about_btn)
+        self.update_btn = QPushButton(t("check_updates_now"))
+        self.update_btn.clicked.connect(lambda: parent.check_for_updates(manual=True) if parent else None)
+        row = QHBoxLayout()
+        row.addWidget(self.update_btn)
+        row.addWidget(about_btn)
+        row.addStretch(1)
+        layout.addRow(row)
 
         # CLI verification status
         verified = settings.get("cli_verified", False)
@@ -1343,6 +1472,7 @@ class OptionsDialog(QDialog):
             "autostart": self.autostart.isChecked(),
             "confirm_actions": self.confirm.isChecked(),
             "tray_color_change": self.tray_color.isChecked(),
+            "check_updates": self.check_updates.isChecked(),
             "theme": self.theme.currentText(),
             "language": self.language.currentData(),
             "language_set": True,
@@ -1812,6 +1942,10 @@ class MainWindow(QMainWindow):
         self.signals = Signals()
         self.signals.status_update.connect(self.on_status_update)
         self.signals.host_status.connect(self.on_host_status)
+        self.signals.update_result.connect(self.on_update_result)
+        self._pending_update: dict | None = None   # found while the window was hidden
+        self._update_running = False
+        self._options_dlg = None
         self._checking: set[str] = set()      # host ids with a check in flight
         self._checking_lock = threading.Lock()
         self.signals.action_started.connect(self.on_action_started)
@@ -1907,6 +2041,9 @@ class MainWindow(QMainWindow):
 
         # Toast overlay (UI only)
         self.toast = Toast(central)
+        self.update_toast = UpdateToast(central, self._open_update_page)
+        for b in self.update_toast.buttons:
+            b.installEventFilter(self)
 
         st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
         self._set_log_visible(str(st.value("log_visible", "false")).lower() == "true")
@@ -1948,6 +2085,9 @@ class MainWindow(QMainWindow):
             interval = self.cfg["settings"].get("status_interval", 30) * 1000
             self.status_timer.start(interval)
             QTimer.singleShot(1000, self.check_status)
+
+        if self.cfg["settings"].get("check_updates", True):
+            QTimer.singleShot(4000, self.check_for_updates)
 
         if self.cfg["settings"].get("start_minimized", True):
             QTimer.singleShot(100, self.hide)
@@ -2447,7 +2587,10 @@ class MainWindow(QMainWindow):
 
     def open_options(self):
         dlg = OptionsDialog(self.cfg["settings"], self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
+        self._options_dlg = dlg          # live "last checked" while it is open
+        accepted = dlg.exec() == QDialog.DialogCode.Accepted
+        self._options_dlg = None
+        if accepted:
             new = dlg.get_settings()
             theme_changed = new.get("theme") != self.cfg["settings"].get("theme")
             lang_changed = resolve_language(new) != resolve_language(self.cfg["settings"])
@@ -2548,15 +2691,100 @@ class MainWindow(QMainWindow):
             detail = detail[:300] + "…"
         self.toast.show_message(title, detail, kind, self._light(), 9000 if kind == "error" else 4500)
 
-    def _toast_bottom(self):
-        """Toast sits just above the log toggle (bottom right of the host list)."""
+    def _toast_base_bottom(self):
         cw = self.centralWidget()
         return self.scroll.mapTo(cw, self.scroll.rect().bottomLeft()).y() - 8
 
+    def _toast_bottom(self):
+        """Toast sits just above the log toggle (bottom right of the host list),
+        stacked above the update toast while that one is shown."""
+        b = self._toast_base_bottom()
+        if hasattr(self, "update_toast") and self.update_toast.isVisible():
+            b = self.update_toast.y() - 8
+        return b
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if hasattr(self, "update_toast") and self.update_toast.isVisible():
+            self.update_toast.place()
         if hasattr(self, "toast") and self.toast.isVisible():
             self.toast.place()
+
+    # --- update check (reads the latest GitHub release; never downloads) ----------
+    def check_for_updates(self, manual: bool = False):
+        if self._update_running:
+            return
+        self._update_running = True
+        if self._options_dlg:
+            self._options_dlg.update_lbl.setText(t("update_checking"))
+
+        def worker():
+            try:
+                rel = fetch_latest_release(timeout=5.0)
+                res = {"ok": True, "manual": manual, **rel, "newer": is_newer_version(rel["version"])}
+            except Exception as e:
+                logging.info("Update check failed: %s", e)
+                res = {"ok": False, "manual": manual, "error": str(e)[:200]}
+            self.signals.update_result.emit(res)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_update_result(self, res: dict):
+        self._update_running = False
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        st.setValue("update/last_checked", time.strftime("%Y-%m-%dT%H:%M:%S"))
+        st.setValue("update/last_result", ("newer:" + res["version"]) if res.get("ok") and res["newer"]
+                    else ("current" if res.get("ok") else "error"))
+        st.sync()
+        if self._options_dlg:
+            self._options_dlg.update_lbl.setText(self.update_status_text())
+        if not res.get("ok"):
+            if res.get("manual"):   # the automatic check stays silent
+                notify(self, t("update_failed"), res.get("error", ""), kind="error")
+            return
+        self.log_output(f"Update check: latest {res['version']}, running {APP_VERSION}")
+        if res["newer"]:
+            self._pending_update = res
+            if self.isVisible():
+                self._show_update_toast()
+            else:
+                self.tray.showMessage("BuddyRemote", t("update_available", version=res["version"]),
+                                      QSystemTrayIcon.MessageIcon.Information, 8000)
+        elif res.get("manual"):
+            notify(self, t("update_current", version=APP_VERSION), kind="ok")
+
+    def _show_update_toast(self):
+        if not self._pending_update:
+            return
+        self.update_toast.show_update(self._pending_update["version"], self._light())
+        if self.toast.isVisible():
+            self.toast.place()
+
+    def _open_update_page(self):
+        url = (self._pending_update or {}).get("url") or "https://github.com/deciderino/BuddyRemote/releases/latest"
+        QDesktopServices.openUrl(QUrl(url))
+        self.update_toast.hide()
+
+    def update_status_text(self) -> str:
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        when = str(st.value("update/last_checked", "") or "")
+        if not when:
+            return t("update_never")
+        try:
+            tm = time.strptime(when, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return t("update_never")
+        if time.strftime("%Y-%m-%d", tm) == time.strftime("%Y-%m-%d"):
+            day = t("today") + " " + time.strftime("%H:%M", tm)
+        else:
+            day = time.strftime(t("date_fmt"), tm)
+        res = str(st.value("update/last_result", "") or "")
+        if res.startswith("newer:"):
+            what = t("update_res_newer", version=res[6:])
+        elif res == "current":
+            what = t("update_res_current")
+        else:
+            what = t("update_res_error")
+        return t("update_last_checked", when=day, result=what)
 
     def _update_counts(self):
         if not hasattr(self, "count_lbl"):
@@ -2612,7 +2840,10 @@ class MainWindow(QMainWindow):
     def _nav_grid(self):
         """Arrow-key/controller grid: one row per toolbar, host card and log button.
         Disabled buttons are skipped (not focusable)."""
-        grid = [self.toolbar_buttons] + [r.nav_buttons for r in self.host_rows.values()] + [[self.log_btn]]
+        grid = [self.toolbar_buttons] + [r.nav_buttons for r in self.host_rows.values()]
+        if self.update_toast.isVisible():
+            grid.append(self.update_toast.buttons)
+        grid.append([self.log_btn])
         grid = [[b for b in row if self._navigable(b)] for row in grid]
         return [row for row in grid if row]
 
@@ -2774,6 +3005,8 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         self._was_shown = True
         QTimer.singleShot(0, self._focus_first)
+        if self._pending_update and not self.update_toast.isVisible():
+            QTimer.singleShot(300, self._show_update_toast)   # found while hidden in the tray
 
     def hideEvent(self, event):
         self._save_window_state()
