@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QScrollArea, QDialog, QFormLayout,
     QLineEdit, QCheckBox, QSpinBox, QMessageBox, QSystemTrayIcon, QMenu,
-    QTextEdit, QComboBox, QAbstractButton, QStatusBar
+    QTextEdit, QComboBox, QAbstractButton, QStatusBar, QBoxLayout, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings
 from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics
@@ -543,6 +543,19 @@ def ui_colors(light: bool) -> dict:
                 in_bg="#3a3424", in_b="#ffb300", in_t="#e6e6e6", dim="#a8a8a8")
 
 
+class _ResizeWatcher(QObject):
+    """UI only: calls back when a widget is resized (used for responsive host cards)."""
+    def __init__(self, target, callback):
+        super().__init__(target)
+        self._cb = callback
+        target.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.Resize:
+            self._cb()
+        return False
+
+
 class HostRow(QFrame):
     """One host as a card: status dot, name + IP pill, status line, and one visible
     button per existing action. UI only; every button calls the same handler as before."""
@@ -556,15 +569,24 @@ class HostRow(QFrame):
         self.busy = False           # UI only: an action is running for this host
         self.failed = False         # UI only: the last action failed
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 10, 10)
+        # UI only: [head | buttons] side by side; on narrow windows the buttons wrap
+        # onto a second line under the name (set_compact), so nothing gets cut off.
+        self._outer = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._outer.setContentsMargins(14, 10, 10, 10)
+        self._outer.setSpacing(6)
+        self._compact = False
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        self._head = head
+        layout = QHBoxLayout()
         layout.setSpacing(6)
+        self._btns = layout
         self.nav_buttons = []  # UI only: arrow-key navigation order
 
         self.dot = QLabel()
         self.dot.setFixedSize(14, 14)
-        layout.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.addSpacing(4)
+        head.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addSpacing(4)
 
         info = QVBoxLayout()
         info.setSpacing(2)
@@ -592,7 +614,9 @@ class HostRow(QFrame):
         info.addLayout(top)
         info.addWidget(self.status_lbl)
         info.addWidget(self.error_lbl)
-        layout.addLayout(info, 1)
+        head.addLayout(info, 1)
+        self._outer.addLayout(head, 1)
+        self._outer.addLayout(layout, 0)
         self._status_text = t("unknown")
         self._checked = ""
 
@@ -623,9 +647,44 @@ class HostRow(QFrame):
             b.installEventFilter(self.app)
             self.nav_buttons.append(b)
             layout.addWidget(b)
+        layout.addStretch(1)  # compact mode: keep buttons left-aligned under the name
 
         self._apply_row_theme()
         self._render()
+
+    # --- UI only: responsive layout -----------------------------------------
+    def _btns_width(self) -> int:
+        b = self._btns
+        n = sum(1 for i in range(b.count()) if b.itemAt(i).widget())
+        w = sum(b.itemAt(i).widget().sizeHint().width() for i in range(b.count()) if b.itemAt(i).widget())
+        return w + b.spacing() * max(0, n - 1) + 6  # + the spacer between the groups
+
+    def _indent(self) -> int:
+        return self.dot.width() + 4 + self._head.spacing()
+
+    def wide_width(self) -> int:
+        # Width needed to show name and all buttons on one line.
+        m = self._outer.contentsMargins()
+        return m.left() + m.right() + self._head.minimumSize().width() + 6 + self._btns_width()
+
+    def compact_width(self) -> int:
+        # Smallest sensible width: buttons on their own line, never cut off.
+        m = self._outer.contentsMargins()
+        return m.left() + m.right() + max(self._head.minimumSize().width(), self._indent() + self._btns_width())
+
+    def compact_height(self) -> int:
+        m = self._outer.contentsMargins()
+        bh = max(self.nav_buttons[0].sizeHint().height(), self.nav_buttons[-1].sizeHint().height())
+        return m.top() + m.bottom() + self._head.sizeHint().height() + 8 + bh
+
+    def set_compact(self, on: bool):
+        if on == self._compact:
+            return
+        self._compact = on
+        self._outer.setDirection(QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight)
+        self._outer.setSpacing(8 if on else 6)
+        self._btns.setContentsMargins(self._indent() if on else 0, 0, 0, 0)
+        self._outer.setStretch(0, 0 if on else 1)
 
     def _light(self) -> bool:
         return self.app.cfg.get("settings", {}).get("theme", "Dark") == "Light"
@@ -945,7 +1004,6 @@ class MainWindow(QMainWindow):
         self.status_timer.timeout.connect(self.check_status)
 
         self.setWindowTitle(t("app_title"))
-        self.setMinimumSize(640, 420)
         self.apply_theme()
 
         central = QWidget()
@@ -989,8 +1047,10 @@ class MainWindow(QMainWindow):
         self.host_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.host_layout.setSpacing(8)
         scroll.setWidget(self.host_widget)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # rows wrap instead
         self._body_layout.addWidget(scroll, 1)
         self.scroll = scroll
+        self._vp_watch = _ResizeWatcher(scroll.viewport(), self._relayout_rows)
         self._apply_host_area_theme()
 
         # Collapsible log (UI only; same log content as before)
@@ -1018,6 +1078,8 @@ class MainWindow(QMainWindow):
         self.cli_lbl = QLabel("")
         sb = QStatusBar()
         sb.setSizeGripEnabled(False)
+        # UI only: a long message must never push the right-hand labels out of the window
+        self.status_bar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         sb.addWidget(self.status_bar, 1)
         for w in (self.count_lbl, self.refresh_lbl, self.cli_lbl):
             sb.addPermanentWidget(w)
@@ -1107,10 +1169,20 @@ class MainWindow(QMainWindow):
         light = self.cfg.get("settings", {}).get("theme", "Dark") == "Light"
         if light:
             self.host_widget.setStyleSheet("QWidget#hostArea { background: #f5f5f5; }")
-            self.scroll.setStyleSheet("QScrollArea { border: none; background: #f5f5f5; }")
+            self.scroll.setStyleSheet("QScrollArea { border: none; background: #f5f5f5; }"
+                "QScrollBar:vertical { background: transparent; width: 10px; margin: 2px 0 2px 0; }"
+                "QScrollBar::handle:vertical { background: #c4c4c4; border-radius: 4px; min-height: 32px; margin: 0 2px; }"
+                "QScrollBar::handle:vertical:hover { background: #a8a8a8; }"
+                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }")
         else:
             self.host_widget.setStyleSheet("QWidget#hostArea { background: #1e1e1e; }")
-            self.scroll.setStyleSheet("QScrollArea { border: none; background: #1e1e1e; }")
+            self.scroll.setStyleSheet("QScrollArea { border: none; background: #1e1e1e; }"
+                "QScrollBar:vertical { background: transparent; width: 10px; margin: 2px 0 2px 0; }"
+                "QScrollBar::handle:vertical { background: #4a4a4a; border-radius: 4px; min-height: 32px; margin: 0 2px; }"
+                "QScrollBar::handle:vertical:hover { background: #5e5e5e; }"
+                "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+                "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }")
 
     def _apply_output_theme(self):
         if not hasattr(self, "output"):
@@ -1199,6 +1271,7 @@ class MainWindow(QMainWindow):
         self._update_tray_menu()
         self._update_counts()
         self._fit_min_size()
+        self._relayout_rows()
         QTimer.singleShot(0, self._ensure_focus)
 
     def add_host(self):
@@ -1591,6 +1664,8 @@ class MainWindow(QMainWindow):
 
     def _set_log_visible(self, on: bool):
         self.output.setVisible(on)
+        if hasattr(self, "tray"):
+            self._fit_min_size()
         self.log_btn.setText(("▾ " if on else "▸ ") + t("log_toggle"))
         if hasattr(self, "toast") and self.toast.isVisible():
             QTimer.singleShot(0, self.toast.place)
@@ -1660,17 +1735,75 @@ class MainWindow(QMainWindow):
         scr = self.screen() or QApplication.primaryScreen()
         return scr.availableGeometry() if scr else None
 
+    # UI only: cards never get wider than this (wide/maximized windows keep the
+    # buttons close to the host name; cards are centered).
+    CARD_MAX_EXTRA = 200
+
+    def _relayout_rows(self):
+        """UI only: pick one-line or two-line cards from the visible width and
+        center the cards when the window is very wide."""
+        rows = list(self.host_rows.values())
+        if not rows:
+            self.host_layout.setContentsMargins(0, 0, 0, 0)
+            return
+        vw = self.scroll.viewport().width()
+        need = max(r.wide_width() for r in rows)
+        cap = need + self.CARD_MAX_EXTRA
+        side = max(0, (vw - cap) // 2)
+        m = self.host_layout.contentsMargins()
+        if m.left() != side:
+            self.host_layout.setContentsMargins(side, 0, side, 0)
+        compact = vw - 2 * side < need
+        for r in rows:
+            r.set_compact(compact)
+
     def _fit_min_size(self):
+        """UI only: minimum size computed from the real layout (scales with font
+        size and display scaling): the narrowest card with all buttons visible
+        (two-line card), toolbar and status bar; height keeps one card visible."""
         avail = self._available()
-        need = max([r.minimumSizeHint().width() for r in self.host_rows.values()] + [640])
-        lm = self._body_layout.contentsMargins() if hasattr(self, "_body_layout") else None
-        need += (lm.left() + lm.right() if lm else 20) + self.scroll.verticalScrollBar().sizeHint().width() + 6
-        hm = self.host_layout.contentsMargins()
-        need += hm.left() + hm.right() + 2 * self.scroll.frameWidth()
-        w, h = need, 420
+        rows = list(self.host_rows.values())
+        bm = self._body_layout.contentsMargins()
+        chrome_w = bm.left() + bm.right() + 2 * self.scroll.frameWidth() + self.scroll.verticalScrollBar().sizeHint().width()
+        card_w = max([r.compact_width() for r in rows] + [0])
+        perm = sum(l.sizeHint().width() for l in (self.count_lbl, self.refresh_lbl, self.cli_lbl)) + 60
+        w = max(card_w + chrome_w, self.toolbar.minimumSizeHint().width(), perm, 420)
+        card_h = max([r.compact_height() for r in rows] + [80])
+        h = (self.toolbar.sizeHint().height() + (self.statusBar().sizeHint().height() if self.statusBar() else 0)
+             + bm.top() + bm.bottom() + 2 * self.scroll.frameWidth() + card_h
+             + self._body_layout.spacing() * 2 + self.log_btn.sizeHint().height())
+        if self.output.isVisible():
+            h += self.output.minimumSizeHint().height() + self._body_layout.spacing()
         if avail:
             w, h = min(w, avail.width()), min(h, avail.height())
         self.setMinimumSize(w, h)
+
+    @staticmethod
+    def _is_wayland() -> bool:
+        return QApplication.platformName().startswith("wayland")
+
+    def _clamp_to_screen(self):
+        """UI only: saved geometry larger than the screen is shrunk; a window whose
+        title bar ended up off-screen (X11; Wayland ignores positions) is pulled back."""
+        avail = self._available()
+        if not avail or self.isMaximized() or self.isFullScreen():
+            return
+        if self.width() > avail.width() or self.height() > avail.height():
+            self.resize(min(self.width(), avail.width()), min(self.height(), avail.height()))
+        if self._is_wayland():
+            return
+        fg = self.frameGeometry()
+        visible = False
+        for scr in QApplication.screens():
+            a = scr.availableGeometry()
+            title = fg.adjusted(0, 0, 0, -(fg.height() - 40))  # top 40 px: the grab area
+            if a.intersected(title).width() >= 100:
+                visible = True
+                break
+        if not visible:
+            x = avail.x() + (avail.width() - fg.width()) // 2
+            y = avail.y() + (avail.height() - fg.height()) // 2
+            self.move(max(avail.x(), x), max(avail.y(), y))
 
     def _restore_window_state(self):
         self._fit_min_size()
@@ -1683,9 +1816,7 @@ class MainWindow(QMainWindow):
                 w = max(min(w, int(avail.width() * 0.9)), min(self.minimumWidth(), avail.width()))
                 h = max(min(h, int(avail.height() * 0.9)), min(self.minimumHeight(), avail.height()))
             self.resize(w, h)
-        avail = self._available()
-        if avail and not self.isMaximized() and (self.width() > avail.width() or self.height() > avail.height()):
-            self.resize(min(self.width(), avail.width()), min(self.height(), avail.height()))
+        self._clamp_to_screen()
 
     def _save_window_state(self):
         if not self._was_shown:
@@ -1738,6 +1869,10 @@ def main():
         print("BuddyRemote is already running.")
         sys.exit(0)
 
+    # UI only: fractional display scaling (125 %, 150 %, ...) is used as-is instead of
+    # being rounded to whole numbers. This is already the Qt 6 default; set explicitly
+    # so it stays that way (all sizes in the stylesheets are device-independent px).
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setApplicationName("BuddyRemote")
     # Apply theme to all dialogs
