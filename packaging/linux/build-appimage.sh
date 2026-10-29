@@ -4,6 +4,7 @@
 #        + PySDL2 + pysdl2-dll; pysdl2-dll only provides the prebuilt libSDL2 that gets bundled)
 # Env: MOONDECK_CLI=/path/to/moondeck-cli-linux.bin  (bundled CLI, required)
 #      MOONDECK_CLI_SHA256=<sha>                      (pinned checksum, required)
+#      MOONDECK_CLI_VERSION=nightly MOONDECK_CLI_COMMIT=00f8c31  (shown in Options; these are the defaults)
 #      APPIMAGETOOL=/path/to/appimagetool
 #      EXTRA_LIBS_DIR=/path/to/xcb-util-libs (optional; Ubuntu 22.04 libxcb-cursor0, -icccm4, -image0, -keysyms1, -render-util0, -util1)
 set -euo pipefail
@@ -16,6 +17,11 @@ echo "$MOONDECK_CLI_SHA256  $MOONDECK_CLI" | sha256sum -c -
 rm -rf build dist/BuddyRemote AppDir
 mkdir -p build/bundled build/licenses build/libsdl2
 cp "$MOONDECK_CLI" build/bundled/moondeck-cli && chmod 755 build/bundled/moondeck-cli
+# Version info for the Options dialog ("MoonDeck CLI: bundled (nightly, commit 00f8c31)");
+# the app also re-copies the CLI into the user dir when this file changes.
+printf '{"version": "%s", "commit": "%s", "sha256": "%s"}\n' \
+  "${MOONDECK_CLI_VERSION:-nightly}" "${MOONDECK_CLI_COMMIT:-00f8c31}" "$MOONDECK_CLI_SHA256" \
+  > build/bundled/moondeck-cli.version
 cp "$PKG"/licenses/* build/licenses/
 cp LICENSE build/licenses/BuddyRemote-GPL-3.0.txt
 SP="$(python -c 'import site;print(site.getsitepackages()[0])')"

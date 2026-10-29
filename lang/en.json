@@ -144,5 +144,9 @@
   "update_failed": "Update check failed",
   "today": "today",
   "date_fmt": "%Y-%m-%d %H:%M",
-  "close": "Close"
+  "close": "Close",
+  "cli_bundled_full": "bundled ({version}, commit {commit})",
+  "cli_bundled_ver": "bundled ({version})",
+  "cli_bundled": "bundled",
+  "cli_bundled_missing": "The bundled MoonDeck CLI is missing from this AppImage. Wake, shutdown and pairing will not work – please download the AppImage again."
 }

@@ -66,10 +66,41 @@ def prepare_packaged_dir():
     if not CONFIG_FILE.exists() and (RES_DIR / "config.json").exists():
         shutil.copyfile(RES_DIR / "config.json", CONFIG_FILE)
     bundled_cli = RES_DIR / "bundled" / "moondeck-cli"
-    if not CLI_BIN.exists() and bundled_cli.exists():
+    bundled_ver = RES_DIR / "bundled" / "moondeck-cli.version"
+    local_ver = CLI_DIR / "moondeck-cli.version"
+    # Copy the bundled CLI on first start, and again when a newer AppImage brings a
+    # different CLI build (its version file differs from the copied one).
+    outdated = (bundled_ver.exists() and
+                (not local_ver.exists() or local_ver.read_bytes() != bundled_ver.read_bytes()))
+    if bundled_cli.exists() and (not CLI_BIN.exists() or outdated):
         CLI_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(bundled_cli, CLI_BIN)
-        CLI_BIN.chmod(0o755)
+        tmp = CLI_BIN.with_suffix(".tmp")
+        shutil.copyfile(bundled_cli, tmp)
+        tmp.chmod(0o755)
+        tmp.replace(CLI_BIN)
+        if bundled_ver.exists():
+            shutil.copyfile(bundled_ver, local_ver)
+
+def bundled_cli_info() -> dict | None:
+    """Packaged mode: {'version', 'commit', 'sha256'} written by build-appimage.sh."""
+    for p in (RES_DIR / "bundled" / "moondeck-cli.version", CLI_DIR / "moondeck-cli.version"):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            continue
+    return None
+
+def bundled_cli_text() -> str:
+    info = bundled_cli_info() or {}
+    ver = str(info.get("version") or "").strip()
+    commit = str(info.get("commit") or "").strip()[:7]
+    if ver and commit:
+        return t("cli_bundled_full", version=ver, commit=commit)
+    if ver:
+        return t("cli_bundled_ver", version=ver)
+    return t("cli_bundled")
 
 def setup_logging(enabled: bool):
     handlers = [logging.FileHandler(LOG_FILE, encoding="utf-8")] if enabled else [logging.NullHandler()]
@@ -1415,6 +1446,29 @@ class OptionsDialog(QDialog):
         row.addStretch(1)
         layout.addRow(row)
 
+        self.verify_label = None
+        if PACKAGED:
+            # The AppImage ships a pinned CLI (checksum checked at build time):
+            # no download / verify UI, just what is bundled.
+            cli_lbl = QLabel(bundled_cli_text())
+            cli_lbl.setWordWrap(True)
+            layout.addRow("MoonDeck CLI:", cli_lbl)
+        else:
+            self._add_cli_verify_rows(layout, settings)
+
+        btns = QHBoxLayout()
+        save = QPushButton(t("save"))
+        save.clicked.connect(self.accept)
+        cancel = QPushButton(t("cancel"))
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(save)
+        btns.addWidget(cancel)
+        layout.addRow(btns)
+        install_dialog_nav(self)
+        fit_dialog_to_screen(self)
+
+    def _add_cli_verify_rows(self, layout, settings):
+        """Source mode (unchanged): checksum state of the downloaded CLI + re-verify."""
         # CLI verification status
         verified = settings.get("cli_verified", False)
         vhash = settings.get("cli_hash", "")
@@ -1431,17 +1485,6 @@ class OptionsDialog(QDialog):
         verify_btn = QPushButton("Verify checksum")
         verify_btn.clicked.connect(self._do_verify)
         layout.addRow(verify_btn)
-
-        btns = QHBoxLayout()
-        save = QPushButton(t("save"))
-        save.clicked.connect(self.accept)
-        cancel = QPushButton(t("cancel"))
-        cancel.clicked.connect(self.reject)
-        btns.addWidget(save)
-        btns.addWidget(cancel)
-        layout.addRow(btns)
-        install_dialog_nav(self)
-        fit_dialog_to_screen(self)
 
     def _do_verify(self):
         ok, msg = verify_existing_cli()
@@ -3087,7 +3130,11 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     # Ensure CLI is present
-    if not cli_available():
+    if PACKAGED:
+        # Packaged: the CLI comes from the bundle (prepare_packaged_dir); never download.
+        if not cli_available():
+            QMessageBox.warning(None, "BuddyRemote", t("cli_bundled_missing"))
+    elif not cli_available():
         dlg = DownloadDialog()
         dlg.show()
         ok = download_cli(dlg.set_status)

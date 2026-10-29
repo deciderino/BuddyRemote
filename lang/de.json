@@ -144,5 +144,9 @@
   "update_failed": "Update-Prüfung fehlgeschlagen",
   "today": "heute",
   "date_fmt": "%d.%m.%Y %H:%M",
-  "close": "Schließen"
+  "close": "Schließen",
+  "cli_bundled_full": "mitgeliefert ({version}, Commit {commit})",
+  "cli_bundled_ver": "mitgeliefert ({version})",
+  "cli_bundled": "mitgeliefert",
+  "cli_bundled_missing": "Die mitgelieferte MoonDeck CLI fehlt in diesem AppImage. Aufwecken, Herunterfahren und Koppeln funktionieren nicht – bitte das AppImage neu herunterladen."
 }
