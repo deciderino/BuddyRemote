@@ -16,7 +16,7 @@ A lightweight, free and open-source **Linux GUI** for controlling **Windows and 
 
 ## What is BuddyRemote?
 
-BuddyRemote lets you **wake, shut down, restart, or suspend** your PCs from a simple graphical interface on Linux.
+BuddyRemote lets you **wake, shut down, restart, suspend, or hibernate** your PCs, and **start or close Steam (Big Picture)** on them, from a simple graphical interface on Linux.
 
 It was made for **Linux HTPCs, Steam Deck Desktop Mode, and home game streaming setups**—but you don't need a game streaming session to use it. Power controls work independently of Steam, Sunshine, Apollo, and Moonlight, as long as MoonDeck Buddy is available on the host.
 
@@ -34,14 +34,19 @@ It was made for **Linux HTPCs, Steam Deck Desktop Mode, and home game streaming 
 | Feature | What it does |
 | --- | --- |
 | **Wake-on-LAN** | Wake your Windows or Linux host remotely. |
-| **Power controls** | Shut down, restart, or suspend a host. |
+| **Power controls** | Shut down, restart, suspend, or hibernate a host. |
+| **Steam** | Start Steam in Big Picture mode on a host, or close it again. |
+| **Live status** | Each host card shows whether the PC answers ping, whether MoonDeck Buddy is reachable, and whether Steam / Big Picture is running. Checked every 30 s by default (10–300 s, configurable). Buttons that can't do anything right now are greyed out, with a tooltip explaining why. |
+| **Touch, keyboard & gamepad** | Large buttons (at least 48 px) for touch screens; full keyboard and gamepad navigation. |
 | **Multiple hosts** | Manage several PCs from one window. |
 | **Easy pairing** | Enter the host IP address and complete MoonDeck Buddy pairing. |
 | **Automatic MAC detection** | Retrieve the host's MAC address through the MoonDeck CLI. |
 | **Portable launch** | Run from an extracted folder without a traditional system-wide app installation. |
 | **Automatic setup** | Create a Python virtual environment and install required dependencies on first launch. |
-| **MoonDeck CLI setup** | Download the required CLI automatically, with checksum verification when available. |
-| **System tray** | Keep BuddyRemote conveniently accessible. |
+| **MoonDeck CLI setup** | The AppImage includes the MoonDeck CLI. When running from source, the CLI is downloaded automatically, with checksum verification when available. |
+| **Update notice** | On startup, BuddyRemote asks GitHub whether a newer release exists and shows a small notice with a download link. Nothing is downloaded or installed automatically. You can turn this off in Options. |
+| **System tray** | Keep BuddyRemote conveniently accessible. The tray icon turns green when MoonDeck Buddy is reachable on at least one host. |
+| **German & English** | The language follows the system, or you can pick one in Options. |
 | **Optional logs** | Enable application logging for troubleshooting. |
 
 ## Getting started
@@ -80,6 +85,24 @@ Control your host from the BuddyRemote GUI.
 - **Host:** Windows or Linux with **MoonDeck Buddy** installed.
 - Both devices connected to a **trusted local network**.
 - Wake-on-LAN supported and enabled on the host if you want remote wake-up.
+
+### Host setup tips
+
+**Allow ping on Windows hosts.** BuddyRemote pings each host to tell "PC is on, but MoonDeck Buddy isn't answering" apart from "PC is off". Windows blocks ping by default. To allow it, enable the firewall rule **"File and Printer Sharing (Echo Request - ICMPv4-In)"**: go to *Windows Defender Firewall → Advanced settings → Inbound Rules* and enable it for the *Private* profile. Or run this in an administrator PowerShell; it works whatever your Windows language:
+
+```powershell
+Get-NetFirewallRule -Name FPS-ICMP4-ERQ-In | Enable-NetFirewallRule
+```
+
+If ping is blocked, BuddyRemote still works. It then only knows the PC is on while MoonDeck Buddy answers.
+
+**Hibernate must be enabled on the host.** Windows often turns hibernation off. To turn it on, run this in an administrator command prompt:
+
+```
+powercfg /hibernate on
+```
+
+On Linux hosts, hibernation needs a swap partition or swap file at least as large as the RAM, and a configured resume device. If hibernation isn't available, BuddyRemote shows an error message and the PC keeps running.
 
 > **First launch:** Internet access is needed to download Python dependencies and the MoonDeck CLI. After setup, BuddyRemote operates over your local network without requiring an ongoing internet connection.
 >
