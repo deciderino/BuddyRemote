@@ -395,6 +395,56 @@ def ping_host(ip: str, port: int = 59999, timeout=2.0) -> bool:
     except Exception:
         return False
 
+_ping_warned = False
+
+def ping_icmp(ip: str, timeout_s: int = 1) -> bool:
+    """One ICMP echo through the system ping binary (no raw sockets / root needed).
+    Windows: success only with 'TTL=' in the output ('Destination host unreachable'
+    replies also exit 0 there)."""
+    if not ip:
+        return False
+    win = sys.platform == "win32"
+    if win:
+        cmd = ["ping", "-n", "1", "-w", str(int(timeout_s * 1000)), ip]
+    elif sys.platform == "darwin":
+        cmd = ["ping", "-c", "1", "-t", str(max(1, int(timeout_s))), ip]
+    else:
+        cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout_s))), ip]
+    env = os.environ.copy()
+    if getattr(sys, "frozen", False):
+        # PyInstaller/AppImage: do not hand our bundled libs to a system binary
+        orig = env.get("LD_LIBRARY_PATH_ORIG")
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    kw = {"creationflags": 0x08000000} if win else {}   # CREATE_NO_WINDOW
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                           timeout=timeout_s + 4, env=env, **kw)
+    except OSError as e:
+        global _ping_warned
+        if not _ping_warned:
+            _ping_warned = True
+            logging.warning("ping not usable (%s): PC state comes from Buddy only", e)
+        return False
+    except subprocess.SubprocessError:
+        return False
+    if win:
+        return p.returncode == 0 and "TTL=" in (p.stdout or "").upper()
+    return p.returncode == 0
+
+def parse_steam_status(out: str) -> dict | None:
+    """'steam status --json' output -> {'running': bool, 'bpm': bool} or None."""
+    try:
+        data = json.loads(out[out.index("{"):out.rindex("}") + 1])
+    except ValueError:
+        return None
+    st = data.get("status", data) if isinstance(data, dict) else None
+    if not isinstance(st, dict) or "running" not in st:
+        return None
+    return {"running": bool(st.get("running")), "bpm": bool(st.get("bpm"))}
+
 def check_buddy_api(ip: str, port: int = 59999, timeout=5.0) -> tuple[bool, str]:
     """Direct HTTPS check to Buddy, ignoring self-signed cert. Returns (ok, message)."""
     import ssl
@@ -602,6 +652,7 @@ StartupWMClass=BuddyRemote
 # ---------------------------------------------------------------------------
 class Signals(QObject):
     status_update = pyqtSignal(str, str)  # host_id, status_text
+    host_status = pyqtSignal(str, dict)   # host_id, result of MainWindow._check_host
     action_started = pyqtSignal(str, str, str)  # host_id, name, action
     action_done = pyqtSignal(str, str, str, bool, str)  # host_id, name, action, success, message
 
@@ -1000,7 +1051,11 @@ class HostRow(QFrame):
                 ok, why = buddy, t("why_no_buddy")
             want[b] = ok
             b.setToolTip(tip if ok else f"{tip}\n{why}")
-        fw = QApplication.focusWidget()
+        for b, ok in want.items():        # enable first, so focus can move onto them
+            if ok:
+                b.setEnabled(True)
+                b.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        fw = self.window().focusWidget()
         if fw in want and not want[fw]:
             # move the focus to the nearest button that stays usable before disabling
             idx = self.nav_buttons.index(fw)
@@ -1009,8 +1064,9 @@ class HostRow(QFrame):
                 tgt = min(usable, key=lambda b: abs(self.nav_buttons.index(b) - idx))
                 tgt.setFocus(Qt.FocusReason.TabFocusReason)
         for b, ok in want.items():
-            b.setEnabled(ok)
-            b.setFocusPolicy(Qt.FocusPolicy.StrongFocus if ok else Qt.FocusPolicy.NoFocus)
+            if not ok:
+                b.setEnabled(False)
+                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def set_result(self, result: dict):
         self.result = result
@@ -1755,6 +1811,9 @@ class MainWindow(QMainWindow):
         setup_logging(self.cfg["settings"].get("logging", False))
         self.signals = Signals()
         self.signals.status_update.connect(self.on_status_update)
+        self.signals.host_status.connect(self.on_host_status)
+        self._checking: set[str] = set()      # host ids with a check in flight
+        self._checking_lock = threading.Lock()
         self.signals.action_started.connect(self.on_action_started)
         self.signals.action_done.connect(self.on_action_done)
         self.action_locks: dict[str, threading.Lock] = {}
@@ -2045,6 +2104,7 @@ class MainWindow(QMainWindow):
                 save_config(self.cfg)
                 self.refresh_hosts()
                 self._update_tray_menu()
+                self.check_hosts(data["id"])
                 if QMessageBox.question(self, t("pairing_title"), t("pair_now")) == QMessageBox.StandardButton.Yes:
                     self.start_pairing(data)
 
@@ -2058,8 +2118,10 @@ class MainWindow(QMainWindow):
                         self.cfg["hosts"][i] = data
                         break
                 save_config(self.cfg)
+                self.host_state.pop(host["id"], None)   # IP/port may have changed
                 self.refresh_hosts()
                 self._update_tray_menu()
+                self.check_hosts(data.get("id", host["id"]))
 
     def _fetch_and_save_mac(self, host: dict, cli_cfg_path: Path):
         """After pairing, try to get MAC from Buddy and save it."""
@@ -2086,7 +2148,9 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, t("app_title"), t("confirm_remove", name=name), _YES_NO, _NO) == QMessageBox.StandardButton.Yes:
             self.cfg["hosts"] = [h for h in self.cfg["hosts"] if h["id"] != host["id"]]
             save_config(self.cfg)
+            self.host_state.pop(host["id"], None)
             self.refresh_hosts()
+            self._update_tray_icon(any(s.get("buddy") for s in self.host_state.values()))
 
     def move_host(self, host: dict, direction: int):
         hosts = self.cfg["hosts"]
@@ -2283,21 +2347,66 @@ class MainWindow(QMainWindow):
 
         dlg.button(QMessageBox.StandardButton.Cancel).clicked.connect(on_cancel)
 
-    def check_status(self):
-        self.log_output("Checking host status...")
-        def worker():
-            any_online = False
-            for h in self.cfg.get("hosts", []):
-                online = ping_host(h["ip"], h.get("buddy_port", 59999))
-                status = t("online") if online else t("offline")
-                if online:
-                    any_online = True
-                name = h.get("name", h.get("ip"))
-                logging.info("Status %s: %s", name, status)
-                self.signals.status_update.emit(h["id"], status)
-            self.signals.status_update.emit("__tray__", "online" if any_online else "offline")
-            self.signals.status_update.emit("__log__", "Status check complete")
-        threading.Thread(target=worker, daemon=True).start()
+    def check_status(self, *_signal_args):
+        """Timer, Refresh button and F5: check every host."""
+        self.check_hosts(None)
+
+    def check_hosts(self, only: str | None = None):
+        """Check all hosts (or one id) concurrently; each host in its own thread:
+        ICMP ping and Buddy API at the same time, then - only if Buddy answers -
+        'steam status'. Results arrive through Signals.host_status."""
+        hosts = [h for h in self.cfg.get("hosts", []) if only is None or h.get("id") == only]
+        if not hosts:
+            return
+        if only is None:
+            self.log_output("Checking host status...")
+        ensure_client_id(self.cfg)    # once on the GUI thread, not inside the workers
+        for h in hosts:
+            row = self.host_rows.get(h["id"])
+            if row and row.result is None and not row.checking:
+                row.checking = True
+                row._render()
+            with self._checking_lock:
+                if h["id"] in self._checking:
+                    continue          # previous check of this host still running
+                self._checking.add(h["id"])
+            threading.Thread(target=self._check_host, args=(dict(h),), daemon=True).start()
+
+    def _check_host(self, h: dict):
+        res = {"ping": False, "buddy": False, "steam": None, "time": ""}
+        try:
+            box = {}
+            tp = threading.Thread(target=lambda: box.update(ping=ping_icmp(h.get("ip", ""))), daemon=True)
+            tp.start()
+            res["buddy"] = check_buddy_api(h.get("ip", ""), h.get("buddy_port", 59999), timeout=2.0)[0]
+            tp.join(8)
+            res["ping"] = bool(box.get("ping"))
+            if res["buddy"]:
+                rc, out, err = self._run_cli_for_host(
+                    h, ["steam", "status", "--json", "--buddy-timeout", "2"], timeout=15)
+                res["steam"] = parse_steam_status(out) if rc == 0 else None
+                if rc != 0:
+                    logging.debug("steam status %s rc=%s %s", h.get("name"), rc, (err or out)[:200])
+        except Exception:
+            logging.exception("status check %s", h.get("name"))
+        res["time"] = time.strftime("%H:%M:%S")
+        logging.info("Status %s: ping=%s buddy=%s steam=%s", h.get("name", h.get("ip")),
+                     res["ping"], res["buddy"], res["steam"])
+        self.signals.host_status.emit(h["id"], res)
+
+    def on_host_status(self, hid: str, res: dict):
+        with self._checking_lock:
+            self._checking.discard(hid)
+        if not any(h.get("id") == hid for h in self.cfg.get("hosts", [])):
+            return                    # host was removed meanwhile
+        self.host_state[hid] = res
+        row = self.host_rows.get(hid)
+        if row:
+            row.set_result(res)
+        # tray: online as soon as Buddy answers on any host
+        self._update_tray_icon(any(s.get("buddy") for s in self.host_state.values()))
+        if not self._checking:
+            self.log_output("Status check complete")
 
     def on_status_update(self, hid: str, status: str):
         if hid == "__log__":
@@ -2306,11 +2415,6 @@ class MainWindow(QMainWindow):
         if hid == "__tray__":
             self._update_tray_icon(status == "online")
             return
-        res = {"ping": False, "buddy": status == t("online"), "steam": None, "time": time.strftime("%H:%M:%S")}
-        self.host_state[hid] = res
-        row = self.host_rows.get(hid)
-        if row:
-            row.set_result(res)
 
     def on_action_started(self, hid: str, title: str, action: str):
         self.log_output(f"Running {action} on {title}...")
@@ -2328,6 +2432,11 @@ class MainWindow(QMainWindow):
                 r.set_busy(False)
             else:
                 r.set_failed(t(f"failed_{action}", title=title) + " " + (msg.splitlines()[0][:120] if msg else ""))
+        # the state changes after an action (PC boots / shuts down, Steam starts):
+        # re-check this host a bit later, and once more when it has settled
+        if self.cfg["settings"].get("auto_status", True):
+            for delay in (3000, 15000):
+                QTimer.singleShot(delay, lambda h=hid: self.check_hosts(h))
         if success and action == "wake":
             notify(self, t("wake_sent"), kind="ok")
         elif success:
@@ -2350,6 +2459,8 @@ class MainWindow(QMainWindow):
                 self.status_timer.start(new["status_interval"] * 1000)
             else:
                 self.status_timer.stop()
+            for r in self.host_rows.values():
+                r._render()           # button enablement depends on auto_status
             self._update_status_bar()
             hints = ([t("theme_restart")] if theme_changed else []) + ([t("language_restart")] if lang_changed else [])
             notify(self, t("settings_saved"), "\n".join(hints), kind="ok")
