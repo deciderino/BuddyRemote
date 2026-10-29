@@ -636,6 +636,14 @@ class _ResizeWatcher(QObject):
         return False
 
 
+# Actions: power actions go through MainWindow._run_action ("host <action>"),
+# Steam actions through MainWindow._run_cli_for_host.
+STEAM_ACTIONS = {
+    "steam_launch": ["steam", "launch"],
+    "steam_close": ["steam", "close", "client"],
+}
+CONFIRM_ACTIONS = ("shutdown", "restart", "suspend", "hibernate", "steam_close")
+
 class HostRow(QFrame):
     """One host as a card: status dot, name + IP pill, status line, and one visible
     button per existing action. UI only; every button calls the same handler as before."""
@@ -700,9 +708,11 @@ class HostRow(QFrame):
         self._status_text = t("unknown")
         self._checked = ""
 
+        self.steam_running = None   # True / False / None (unknown), from the status check
         # Action buttons (same handlers as before)
         for act, label in [("wake", t("wake")), ("shutdown", t("shutdown")),
-                           ("restart", t("restart")), ("suspend", t("suspend"))]:
+                           ("restart", t("restart")), ("suspend", t("suspend")),
+                           ("hibernate", t("hibernate"))]:
             btn = QPushButton(label)
             btn.setProperty("touchRole", "action")  # min width via touch_css
             if act == "wake":
@@ -712,6 +722,14 @@ class HostRow(QFrame):
             btn.installEventFilter(self.app)
             self.nav_buttons.append(btn)
             layout.addWidget(btn)
+        self.steam_btn = QPushButton(t("steam_launch"))
+        self.steam_btn.setProperty("touchRole", "action")
+        self.steam_btn.setToolTip(t("tip_steam_launch"))
+        self.steam_btn.clicked.connect(lambda: self.app.do_action(
+            self.host, "steam_close" if self.steam_running else "steam_launch"))
+        self.steam_btn.installEventFilter(self.app)
+        self.nav_buttons.append(self.steam_btn)
+        layout.addWidget(self.steam_btn)
 
         layout.addSpacing(6)
         # Controls
@@ -1787,7 +1805,7 @@ class MainWindow(QMainWindow):
         for h in hosts:
             name = h.get("name", h.get("ip", "?"))
             sub = self.host_menu.addMenu(name)
-            for act in ("wake", "shutdown", "restart", "suspend"):
+            for act in ("wake", "shutdown", "restart", "suspend", "hibernate"):
                 sub.addAction(t(act), lambda _, host=h, a=act: self.do_action(host, a))
 
     def refresh_hosts(self):
@@ -1890,7 +1908,7 @@ class MainWindow(QMainWindow):
             notify(self, t("no_mac"), kind="error")
             return
 
-        if action in ("shutdown", "restart", "suspend") and self.cfg["settings"].get("confirm_actions", True):
+        if action in CONFIRM_ACTIONS and self.cfg["settings"].get("confirm_actions", True):
             if QMessageBox.question(self, t("app_title"), t(f"confirm_{action}", name=name), _YES_NO, _NO) != QMessageBox.StandardButton.Yes:
                 return
 
@@ -1903,7 +1921,10 @@ class MainWindow(QMainWindow):
         def worker():
             try:
                 self.signals.action_started.emit(hid, name, action)
-                rc, out, err = self._run_action(host, action)
+                if action in STEAM_ACTIONS:
+                    rc, out, err = self._run_cli_for_host(host, STEAM_ACTIONS[action], timeout=60)
+                else:
+                    rc, out, err = self._run_action(host, action)
                 msg = (out or err or f"Exit {rc}").strip()
                 success = rc == 0
                 self.signals.action_done.emit(hid, name, action, success, msg)
@@ -1935,6 +1956,35 @@ class MainWindow(QMainWindow):
         try:
             tmp.write_text(json.dumps(cli_cfg))
             return run_cli(["host", action], timeout=60, config_override=tmp)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    def _cli_config_for(self, host: dict) -> dict:
+        """Same temporary CLI config as _run_action builds (kept separate so the
+        existing power/pairing path stays untouched)."""
+        ip = host["ip"]
+        return {
+            "version": 1,
+            "clientId": ensure_client_id(self.cfg),
+            "defaultHost": ip,
+            "hosts": {
+                ip: {
+                    "address": ip,
+                    "manualAddress": True,
+                    "infoPort": 47989,
+                    "buddyPort": host.get("buddy_port", 59999),
+                    "hostName": host.get("name", ip),
+                    "mac": host.get("mac")
+                }
+            }
+        }
+
+    def _run_cli_for_host(self, host: dict, args: list, timeout: int = 60) -> tuple[int, str, str]:
+        """Run any other MoonDeck CLI command (steam launch/close/status) for one host."""
+        tmp = APP_DIR / f".tmp_{uuid.uuid4().hex[:6]}.json"
+        try:
+            tmp.write_text(json.dumps(self._cli_config_for(host)))
+            return run_cli(args, timeout=timeout, config_override=tmp)
         finally:
             tmp.unlink(missing_ok=True)
 
@@ -2076,13 +2126,14 @@ class MainWindow(QMainWindow):
             if success:
                 r.set_busy(False)
             else:
-                r.set_failed(t("action_failed", title=title) + " " + (msg.splitlines()[0][:120] if msg else ""))
+                r.set_failed(t(f"failed_{action}", title=title) + " " + (msg.splitlines()[0][:120] if msg else ""))
         if success and action == "wake":
             notify(self, t("wake_sent"), kind="ok")
         elif success:
-            notify(self, t("action_ok", title=title), kind="ok")
+            notify(self, t(f"done_{action}", title=title), kind="ok")
         else:
-            notify(self, t("action_failed", title=title), t("action_failed_hint") + f"\n\n{msg[:200]}", kind="error")
+            hint = t("hibernate_failed_hint") if action == "hibernate" else t("action_failed_hint")
+            notify(self, t(f"failed_{action}", title=title), hint + f"\n\n{msg[:200]}", kind="error")
 
     def open_options(self):
         dlg = OptionsDialog(self.cfg["settings"], self)
