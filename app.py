@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QAbstractSpinBox
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings
-from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor
+from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator
 
 APP_VERSION = "1.2"
 
@@ -855,11 +855,20 @@ class HostDialog(QDialog):
         self.ip_edit = QLineEdit(host.get("ip", "") if host else "")
         self.mac_edit = QLineEdit(host.get("mac") or "" if host else "")
         self.port_edit = QLineEdit(str(host.get("buddy_port", 59999)) if host else "59999")
+        self.port_edit.setValidator(QIntValidator(1, 65535, self.port_edit))
+        self.port_edit.setPlaceholderText("59999")
+        self.port_error = QLabel(t("port_invalid"))
+        light = bool(parent and hasattr(parent, "cfg") and parent.cfg.get("settings", {}).get("theme", "Dark") == "Light")
+        self.port_error.setStyleSheet(f"color: {ui_colors(light)['err']};")
+        self.port_error.setWordWrap(True)
+        self.port_error.setVisible(False)
+        self.port_edit.textChanged.connect(lambda _: self.port_error.setVisible(False))
 
         layout.addRow(t("name"), self.name_edit)
         layout.addRow(t("ip"), self.ip_edit)
         layout.addRow(t("mac"), self.mac_edit)
         layout.addRow(t("buddy_port"), self.port_edit)
+        layout.addRow("", self.port_error)
 
         btns = QHBoxLayout()
         save_btn = QPushButton(t("save"))
@@ -872,6 +881,25 @@ class HostDialog(QDialog):
         install_dialog_nav(self)
         fit_dialog_to_screen(self)
 
+    def _port(self) -> int | None:
+        """Buddy port from the field: empty = default 59999, None = invalid."""
+        txt = self.port_edit.text().strip()
+        if not txt:
+            return 59999
+        try:
+            port = int(txt)
+        except ValueError:
+            return None
+        return port if 1 <= port <= 65535 else None
+
+    def accept(self):
+        if self._port() is None:
+            self.port_error.setVisible(True)
+            self.port_edit.setFocus()
+            self.port_edit.selectAll()
+            return
+        super().accept()
+
     def get_data(self) -> dict | None:
         ip = self.ip_edit.text().strip()
         if not ip:
@@ -881,7 +909,7 @@ class HostDialog(QDialog):
             "name": self.name_edit.text().strip() or ip,
             "ip": ip,
             "mac": self.mac_edit.text().strip() or None,
-            "buddy_port": int(self.port_edit.text() or 59999)
+            "buddy_port": self._port() or 59999
         }
 
 # ---------------------------------------------------------------------------

@@ -86,5 +86,6 @@
   "attribution": "Diese App nutzt die MoonDeck CLI von FrogTheFrog.\n\nhttps://github.com/FrogTheFrog/moondeck\n\nDanke für die großartige Arbeit!",
   "running_in_background": "Läuft im Hintergrund weiter",
   "cli_download_failed": "MoonDeck CLI konnte nicht heruntergeladen werden.\nBitte Internetverbindung prüfen und erneut versuchen.",
-  "app_version": "App-Version:"
+  "app_version": "App-Version:",
+  "port_invalid": "Port muss eine Zahl von 1 bis 65535 sein."
 }
