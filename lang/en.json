@@ -85,5 +85,6 @@
   "pair_now": "Pair with this host now?",
   "attribution": "This app uses the MoonDeck CLI by FrogTheFrog.\n\nhttps://github.com/FrogTheFrog/moondeck\n\nThank you for the great work!",
   "running_in_background": "Running in background",
-  "cli_download_failed": "Failed to download MoonDeck CLI.\nCheck your internet connection and try again."
+  "cli_download_failed": "Failed to download MoonDeck CLI.\nCheck your internet connection and try again.",
+  "app_version": "App version:"
 }

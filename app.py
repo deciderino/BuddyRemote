@@ -37,6 +37,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings
 from PyQt6.QtGui import QIcon, QAction, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor
 
+APP_VERSION = "1.2"
+
 # ---------------------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
 # Packaging: read-only resources (lang/, default config, bundled CLI) live next to
@@ -934,6 +936,8 @@ class OptionsDialog(QDialog):
         self.language.setCurrentIndex(max(0, self.language.findData(cur)))
         layout.addRow(t("language"), self.language)
 
+        layout.addRow(t("app_version"), QLabel(APP_VERSION))
+
         about_btn = QPushButton(t("about"))
         about_btn.clicked.connect(lambda: parent.show_about() if parent else None)
         layout.addRow(about_btn)
@@ -1442,7 +1446,7 @@ class MainWindow(QMainWindow):
         box.setWindowTitle(t("about_title"))
         box.setTextFormat(Qt.TextFormat.RichText)
         box.setText(
-            "BuddyRemote v1.0<br><br>"
+            f"BuddyRemote v{APP_VERSION}<br><br>"
             "by Diciderino<br><br>"
             + t("about_thanks") + "<br>"
             '<a href="https://github.com/FrogTheFrog/moondeck">https://github.com/FrogTheFrog/moondeck</a>'
