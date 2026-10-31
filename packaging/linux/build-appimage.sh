@@ -5,6 +5,7 @@
 # Env: MOONDECK_CLI=/path/to/moondeck-cli-linux.bin  (bundled CLI, required)
 #      MOONDECK_CLI_SHA256=<sha>                      (pinned checksum, required)
 #      MOONDECK_CLI_VERSION=nightly MOONDECK_CLI_COMMIT=00f8c31  (shown in Options; these are the defaults)
+#      MOONDECK_CLI_BUDDY_API=9   (Buddy API the bundled CLI speaks, lib/constants.py BUDDY_API_VERSION; default 9)
 #      APPIMAGETOOL=/path/to/appimagetool
 #      EXTRA_LIBS_DIR=/path/to/xcb-util-libs (optional; Ubuntu 22.04 libxcb-cursor0, -icccm4, -image0, -keysyms1, -render-util0, -util1)
 set -euo pipefail
@@ -18,9 +19,10 @@ rm -rf build dist/BuddyRemote AppDir
 mkdir -p build/bundled build/licenses build/libsdl2
 cp "$MOONDECK_CLI" build/bundled/moondeck-cli && chmod 755 build/bundled/moondeck-cli
 # Version info for the Options dialog ("MoonDeck CLI: bundled (nightly, commit 00f8c31)");
-# the app also re-copies the CLI into the user dir when this file changes.
-printf '{"version": "%s", "commit": "%s", "sha256": "%s"}\n' \
+# the app runs the CLI straight from the bundle (usr/lib/BuddyRemote/_internal/bundled).
+printf '{"version": "%s", "commit": "%s", "sha256": "%s", "buddy_api": %d}\n' \
   "${MOONDECK_CLI_VERSION:-nightly}" "${MOONDECK_CLI_COMMIT:-00f8c31}" "$MOONDECK_CLI_SHA256" \
+  "${MOONDECK_CLI_BUDDY_API:-9}" \
   > build/bundled/moondeck-cli.version
 cp "$PKG"/licenses/* build/licenses/
 cp LICENSE build/licenses/BuddyRemote-GPL-3.0.txt
@@ -40,8 +42,8 @@ mkdir -p AppDir/usr/lib AppDir/usr/share/licenses/BuddyRemote
 cp -a "$OUT/BuddyRemote" AppDir/usr/lib/
 cp build/licenses/* AppDir/usr/share/licenses/BuddyRemote/
 cp "$PKG/AppRun" AppDir/AppRun
-APP_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' app.py)"
-: "${APP_VERSION:?APP_VERSION not found in app.py}"
+APP_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' paths.py)"
+: "${APP_VERSION:?APP_VERSION not found in paths.py}"
 cp "$PKG/buddyremote.desktop" AppDir/
 echo "X-AppImage-Version=$APP_VERSION" >> AppDir/buddyremote.desktop
 cp "$PKG/buddyremote.png" AppDir/buddyremote.png

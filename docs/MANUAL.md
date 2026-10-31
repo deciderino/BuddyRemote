@@ -1,6 +1,6 @@
 # BuddyRemote manual
 
-This manual covers BuddyRemote **1.3** in detail. For a short overview, see the [README](../README.md).
+This manual covers BuddyRemote **1.3.1** in detail. For a short overview, see the [README](../README.md).
 
 **Contents**
 
@@ -86,10 +86,10 @@ To change a host's name, IP address, MAC address or Buddy port later, or to dele
 
 - **Toolbar:** ＋ add a host, ⟳ refresh the status, ✎ edit mode, ☰ settings. Hover a button to see its name and shortcut. **⌃** on the right collapses the toolbar into a slim strip; **⌄** brings it back. The shortcuts keep working while it is collapsed.
 - **Host cards:** one card per PC with its name, optionally the IP address, and the tiles.
-- **Status dot** next to the host name: **green** = ready, **orange** = the PC is on but MoonDeck Buddy isn't answering, **grey** = off. Hover the dot or the name for details (ping, Buddy, time of the last check). In the orange state, a line "Buddy not answering · ⓘ Details" explains what to check.
+- **Status dot** next to the host name: **green** = ready, **orange** = the PC is on but MoonDeck Buddy isn't answering, **grey** = off. Hover the dot or the name for details (ping, Buddy, time of the last check). In the orange state, a line "Buddy not answering · ⓘ Details" explains what to check. The dot is also orange when MoonDeck Buddy answers but speaks a different version than BuddyRemote expects; the line then says which side to update (see [Troubleshooting](#troubleshooting)).
 - **"▶ Steam running"** appears in the card header while Steam runs on the host (can be turned off in Settings).
 - **Log:** "▸ Log (Ctrl+L)" opens the log panel. Drag its top edge to resize it; double-click the edge to reset the height.
-- **Status bar:** the current state (Ready, Action running …, Editing), the number of hosts online, the refresh interval and whether the MoonDeck CLI is available.
+- **Status bar:** the current state (Ready, Action running …, Editing), the number of hosts online, the refresh interval and whether the MoonDeck CLI is available ("Custom CLI ⚠" while a custom CLI is set).
 - **System tray:** BuddyRemote can stay in the tray. The tray icon turns green when MoonDeck Buddy is reachable on at least one host.
 
 The status is checked every 30 seconds by default (10–300 s, configurable). Buttons that can't do anything right now are greyed out; hover them to see why (for example "PC is already on" on Wake).
@@ -172,13 +172,15 @@ Open the settings with **☰** (Ctrl+,).
 **Updates**
 
 - **Check for updates at startup:** BuddyRemote asks GitHub whether a newer release exists and shows a small notice with a download link. Nothing is downloaded or installed automatically.
-- **Check for updates now.**
+- Two boxes show **BuddyRemote** and the **MoonDeck CLI** side by side (stacked in a narrow window). The CLI check compares the MoonDeck nightly with the CLI bundled in BuddyRemote. A newer CLI is only reported, with a link to its release page; it arrives with the next BuddyRemote update. If both are newer, you get one notice.
+- **Check now** runs both checks; "Last checked" shows when.
 
 **Files**
 
 - **Enable logging** for troubleshooting.
 - **📂 Open data folder:** opens the folder with `config.json`, the log, `window.ini` and the CLI in your file manager. The path is shown next to the button.
-- **CLI checksum:** verify the MoonDeck CLI.
+- **MoonDeck CLI:** BuddyRemote uses the bundled CLI by default. **Choose custom CLI …** lets you pick another MoonDeck CLI binary; it is tested right away and only accepted if it starts. **Back to the bundled CLI** undoes this. If the custom CLI later fails to start or is missing, BuddyRemote uses the bundled one, shows a notice with a **Settings** button and keeps your choice.
+- **CLI checksum** (running from source): verify the MoonDeck CLI.
 
 **About BuddyRemote** shows the version, the thanks to the MoonDeck project and the **Third-party licenses…** viewer.
 
@@ -201,6 +203,8 @@ All buttons are at least 48 px for touch screens. In edit mode, press and hold t
 When running from source, gamepad support needs the optional `PySDL2` and `pysdl2-dll` packages from `requirements.txt` (an existing `.venv` can be updated with `.venv/bin/pip install -r requirements.txt`). Without them, the app works as before, just without gamepad input.
 
 ## Updating from 1.2
+
+Updating from 1.3: just replace the AppImage. A `cli/` folder in `~/.config/BuddyRemote/` from 1.3 is no longer used and can be deleted.
 
 Your hosts and pairings are kept. On the first start, BuddyRemote converts each host once to the new tile layout (Standard template). Going back to 1.2 afterwards works, but duplicates and usage counts are lost.
 
@@ -227,6 +231,7 @@ On Linux hosts, hibernation needs a swap partition or swap file at least as larg
 ## Troubleshooting
 
 - **Orange dot ("Buddy not answering"):** the PC is on, but MoonDeck Buddy doesn't answer. Check that MoonDeck Buddy is running on the host and that its port (default 59999) is allowed in the host's firewall.
+- **Orange dot, "Buddy version does not match" (or "Update Buddy on the host" / "Update BuddyRemote"):** MoonDeck Buddy on the host speaks a different API version than the CLI bundled in BuddyRemote. If the host's Buddy is older, update MoonDeck Buddy on the host; if it is newer, update BuddyRemote. Until then only **Start Steam** is disabled; wake, shutdown and the other power actions keep working. **ⓘ Details** shows both versions.
 - **Wake does nothing:** check that Wake-on-LAN is enabled on the host and that the MAC address in ⚙ is correct. Some PCs only wake from sleep, not from a full shutdown.
 - **Hibernate fails:** see [Host setup tips](#host-setup-tips).
 - **Need more details:** open the log (Ctrl+L), or turn on **Enable logging** in Settings and look into the data folder.

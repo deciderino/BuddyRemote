@@ -71,7 +71,7 @@ chmod +x BuddyRemote-x86_64.AppImage
 ./BuddyRemote-x86_64.AppImage
 ```
 
-Everything is bundled, including the MoonDeck CLI.
+Everything is bundled, including the MoonDeck CLI. You can switch to your own MoonDeck CLI in Settings → Files; the update check also tells you when a newer CLI is out, and a host card warns you when the MoonDeck Buddy version doesn't match.
 
 **4. Pair your host.** Click **＋ Add your first host**, enter the host's **IP address** and confirm the PIN on the host.
 

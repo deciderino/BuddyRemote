@@ -9,3 +9,12 @@ build/
 dist/
 AppDir/
 window.ini
+# User data of a source run (written next to app.py; the shipped first-start
+# defaults are packaging/default-config.json)
+/config.json
+/config.tmp
+/.tmp_*.json
+/.pair_*.json
+/cli/
+/.attributed
+/.instance.lock

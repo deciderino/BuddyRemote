@@ -21,7 +21,7 @@ a = Analysis(
     hiddenimports=["sdl2"],
     datas=[
         (os.path.join(ROOT, "lang"), "lang"),
-        (os.path.join(ROOT, "config.json"), "."),
+        (os.path.join(ROOT, "packaging", "default-config.json"), "packaging"),
         (os.path.join(BUILD, "bundled"), "bundled"),
         (os.path.join(BUILD, "licenses"), "licenses"),
     ],

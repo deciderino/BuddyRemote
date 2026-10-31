@@ -12,6 +12,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import tiles  # noqa: E402
 
 
+def pack_rows(ts):
+    """Test helper (the app keeps empty rows): remove completely empty rows."""
+    ts = tiles.copy_tiles(ts)
+    used = sorted({r for (_, r) in tiles.occupied(ts)})
+    remap = {r: n for n, r in enumerate(used)}
+    for a in ts:
+        if tiles.is_active(a):
+            a["pos"] = [a["pos"][0], remap[a["pos"][1]]]
+    return ts
+
+
 def no_overlap(ts):
     seen = set()
     for a in ts:
@@ -25,11 +36,44 @@ def no_overlap(ts):
     return True
 
 
+def _gap(typ, size, c, r, v=True):
+    return {"typ": typ, "sichtbar": v, "groesse": size, "pos": [c, r]}
+
+
+# Test fixtures: layouts with the (optional) status tile visible on top. The grid
+# tests below were written against these; they test the grid logic, not the
+# shipped templates.
+STATUS_LAYOUTS = {
+    "standard": [
+        _gap("online_status", "mittel", 0, 0),
+        _gap("boot", "klein", 0, 1), _gap("shutdown", "klein", 1, 1),
+        _gap("neustart", "klein", 2, 1), _gap("standby", "klein", 3, 1),
+        _gap("ruhezustand", "klein", 0, 2), _gap("steam_start_stop", "klein", 1, 2),
+    ],
+    "minimal": [
+        _gap("online_status", "breit", 0, 0),
+        _gap("boot", "mittel", 0, 1), _gap("shutdown", "mittel", 2, 1),
+        _gap("neustart", "klein", 0, 3, False),
+        _gap("standby", "klein", 1, 3, False), _gap("ruhezustand", "klein", 2, 3, False),
+        _gap("steam_start_stop", "klein", 3, 3, False),
+    ],
+    "server": [
+        _gap("online_status", "breit", 0, 0),
+        _gap("boot", "mittel", 0, 1), _gap("neustart", "klein", 2, 1), _gap("shutdown", "klein", 3, 1),
+        _gap("standby", "klein", 0, 2, False), _gap("ruhezustand", "klein", 1, 2, False),
+        _gap("steam_start_stop", "klein", 0, 3, False),
+    ],
+    "gaming": [
+        _gap("online_status", "mittel", 0, 0),
+        _gap("boot", "gross", 0, 1), _gap("steam_start_stop", "gross", 2, 1),
+        _gap("shutdown", "klein", 0, 3), _gap("neustart", "klein", 1, 3),
+        _gap("standby", "klein", 2, 3), _gap("ruhezustand", "klein", 3, 3),
+    ],
+}
+
+
 def old(name="standard"):
-    """Revision-1 template (status tile visible). The grid tests below were written
-    against these layouts; they test the grid logic, not the shipped defaults. The
-    removed steam_status tile is left out (its cells are simply free)."""
-    return [a for a in tiles.copy_tiles(tiles.OLD_TEMPLATES[name]) if not tiles.is_removed(a)]
+    return tiles.copy_tiles(STATUS_LAYOUTS[name])
 
 
 def idx(ts, typ):
@@ -191,17 +235,6 @@ class Visibility(unittest.TestCase):
         self.assertEqual(res, "moved")
         self.assertEqual(out[i]["pos"], [0, 2])
 
-    def test_pack_rows(self):
-        ts = old("server")
-        ts, _ = tiles.move(ts, idx(ts, "online_status"), 0, 0)
-        for typ in ("boot", "neustart", "shutdown"):
-            ts, _ = tiles.move(ts, idx(ts, typ), 0, 1)
-            ts, _ = tiles.move(ts, idx(ts, typ), 0, 1)     # now at row 3, rows 1-2 empty
-        packed = tiles.pack_rows(ts)
-        self.assertEqual(tiles.rows_used(packed), 2)
-        self.assertEqual(packed[idx(packed, "boot")]["pos"], [0, 1])
-        self.assertTrue(no_overlap(packed))
-
 
 class Migration(unittest.TestCase):
     HOST_12 = {"id": "h0", "name": "Gaming-PC", "ip": "192.0.2.10", "mac": "00:00:5E:00:53:FF", "buddy_port": 59999}
@@ -246,7 +279,7 @@ class Migration(unittest.TestCase):
         self.assertNotIn("garbage", a)          # no dict: nothing usable, dropped
         self.assertTrue(all(isinstance(x, dict) for x in a))
         self.assertEqual(sorted(x["typ"] for x in a if tiles.is_known(x)), sorted(tiles.TYPE_ORDER))
-        added = [x for x in a if tiles.is_known(x) and x["typ"] in ("ruhezustand", "steam_status")]
+        added = [x for x in a if tiles.is_known(x) and x["typ"] == "ruhezustand"]
         self.assertTrue(all(not x["sichtbar"] for x in added), "missing types are added hidden")
         self.assertEqual(a[idx(a, "boot")]["groesse"], "klein")   # standard size for boot
 
@@ -255,8 +288,7 @@ class Migration(unittest.TestCase):
             {"typ": t, "sichtbar": True, "groesse": "gross", "pos": [0, 0]} for t in tiles.TYPE_ORDER])
         tiles.migrate_host(h)
         self.assertTrue(no_overlap(h["aktionen"]))
-        # 8 x 2x2 fits in 12 rows; old revision -> the status tiles are hidden by the migration
-        self.assertTrue(all(x["sichtbar"] != (x["typ"] in tiles.STATUS_TYPES) for x in h["aktionen"]))
+        self.assertTrue(all(x["sichtbar"] for x in h["aktionen"]), "every tile finds a free place")
 
     def test_not_a_list(self):
         h = dict(self.HOST_12, aktionen="kaputt")
@@ -390,18 +422,7 @@ class ReflowTests(unittest.TestCase):
                     # same set of visible tiles / sizes
                     self.assertEqual([(a["typ"], a["groesse"], a["sichtbar"]) for a in new],
                                      [(a["typ"], a["groesse"], a["sichtbar"]) for a in ts])
-                    ts = tiles.pack_rows(new)
-
-
-def no_overlap(ts):
-    seen = set()
-    for a in ts:
-        if tiles.is_active(a):
-            c = tiles.cells(a["pos"], a["groesse"])
-            if c & seen or not tiles.fits(a["pos"], a["groesse"]):
-                return False
-            seen |= c
-    return True
+                    ts = pack_rows(new)
 
 
 class DuplicateRemoveTests(unittest.TestCase):
@@ -561,10 +582,6 @@ class OnlineStateTests(unittest.TestCase):
         self.assertEqual(tiles.online_state({}), "unknown")
 
 
-def _gap(typ, size, c, r, v=True):
-    return {"typ": typ, "sichtbar": v, "groesse": size, "pos": [c, r]}
-
-
 def _saved_and_loaded(ts):
     """What the edit dialog saves (exact copy), written as JSON and read back the way
     load_config() does it (migrate_host -> normalize)."""
@@ -657,13 +674,7 @@ class GapLayoutPersistenceTests(unittest.TestCase):
 
 
 class SteamStatusRemovedTests(unittest.TestCase):
-    """The steam_status tile type was removed: saved entries are dropped safely."""
-    BASE = {"id": "h0", "name": "PC", "ip": "192.0.2.2", "mac": "00:00:5E:00:53:FF", "layout_rev": 2}
-
-    def run_migrate(self, ts):
-        h = dict(copy.deepcopy(self.BASE), aktionen=copy.deepcopy(ts))
-        tiles.migrate_host(h)
-        return h["aktionen"]
+    """The steam_status tile of the 1.3 drafts never shipped: no such type."""
 
     def test_type_gone(self):
         self.assertNotIn("steam_status", tiles.TYPES)
@@ -672,38 +683,16 @@ class SteamStatusRemovedTests(unittest.TestCase):
         for name, ts in tiles.TEMPLATES.items():
             self.assertFalse(any(a["typ"] == "steam_status" for a in ts), name)
 
-    def test_hidden_entry_dropped(self):
-        a = self.run_migrate(tiles.template("standard") + [_gap("steam_status", "mittel", 2, 2, False)])
-        self.assertEqual(a, tiles.template("standard"))
-
-    def test_visible_entry_row_closed(self):
-        ts = [_gap("steam_status", "breit", 0, 0), _gap("boot", "klein", 0, 1), _gap("shutdown", "klein", 1, 3)]
-        a = self.run_migrate(ts)
-        self.assertFalse(any(isinstance(x, dict) and x.get("typ") == "steam_status" for x in a))
-        self.assertEqual(a[idx(a, "boot")]["pos"], [0, 0])          # its own row is closed
-        self.assertEqual(a[idx(a, "shutdown")]["pos"], [1, 2])      # the deliberate gap stays
-        self.assertTrue(no_overlap(a))
-
-    def test_shared_row_kept(self):
-        ts = [_gap("steam_status", "mittel", 0, 0), _gap("boot", "klein", 2, 0), _gap("shutdown", "klein", 0, 1)]
-        a = self.run_migrate(ts)
-        self.assertEqual(a[idx(a, "boot")]["pos"], [2, 0])
-        self.assertEqual(a[idx(a, "shutdown")]["pos"], [0, 1])
-
-    def test_other_unknown_kept_and_idempotent(self):
-        web = {"typ": "web_link", "sichtbar": True, "groesse": "breit", "pos": [0, 5], "url": "http://nas"}
-        h = dict(copy.deepcopy(self.BASE), aktionen=tiles.template("gaming") + [_gap("steam_status", "mittel", 2, 3), web])
-        self.assertTrue(tiles.migrate_host(h))
-        self.assertIn(web, h["aktionen"])
-        self.assertFalse(tiles.migrate_host(h), "second run is a no-op")
-
-    def test_normalize_drops(self):
-        n = tiles.normalize([_gap("steam_status", "mittel", 0, 0)] + tiles.template())
-        self.assertFalse(any(isinstance(x, dict) and x.get("typ") == "steam_status" for x in n))
+    def test_leftover_entry_is_harmless(self):
+        """A draft config entry is just an unknown type: kept, never shown, takes no cells."""
+        ts = tiles.template("standard") + [_gap("steam_status", "mittel", 0, 0)]
+        n = tiles.normalize(ts)
+        self.assertEqual(n, ts)
+        self.assertTrue(no_overlap(n))
 
 
-class CalmStatusMigrationTests(unittest.TestCase):
-    """Layout revision 1 -> 2: online_status / steam_status leave the visible grid."""
+class LayoutRevisionTests(unittest.TestCase):
+    """layout_rev: every host gets the current revision; nothing else changes yet."""
     BASE = {"id": "h0", "name": "PC", "ip": "192.0.2.2", "mac": "00:00:5E:00:53:FF"}
 
     def host(self, aktionen, rev=None):
@@ -712,52 +701,19 @@ class CalmStatusMigrationTests(unittest.TestCase):
             h["layout_rev"] = rev
         return h
 
-    def test_old_templates_become_new_templates(self):
-        for n in tiles.TEMPLATE_ORDER:
-            with self.subTest(n):
-                h = self.host(tiles.OLD_TEMPLATES[n])
+    def test_older_revision_only_bumped(self):
+        for rev in (None, 1, "1", True):
+            with self.subTest(rev=rev):
+                h = self.host(old("standard"), rev)
                 self.assertTrue(tiles.migrate_host(h))
-                self.assertEqual(h["aktionen"], tiles.TEMPLATES[n])
                 self.assertEqual(h["layout_rev"], tiles.LAYOUT_REV)
+                self.assertEqual(h["aktionen"], tiles.normalize(old("standard")))
+                self.assertTrue(h["aktionen"][idx(h["aktionen"], "online_status")]["sichtbar"])
                 self.assertFalse(tiles.migrate_host(h), "second run is a no-op")
-
-    def test_custom_layout_status_row_removed(self):
-        ts = [_gap("online_status", "mittel", 0, 0), _gap("steam_status", "mittel", 2, 0),
-              _gap("boot", "gross", 0, 1), _gap("shutdown", "klein", 3, 1),
-              _gap("neustart", "klein", 3, 4)]                      # row 3 empty on purpose
-        h = self.host(ts, rev=1)
-        tiles.migrate_host(h)
-        a = h["aktionen"]
-        for t in tiles.STATUS_TYPES:
-            self.assertFalse(a[idx(a, t)]["sichtbar"], t)
-        self.assertEqual(a[idx(a, "boot")]["pos"], [0, 0])          # moved up into the old status row
-        self.assertEqual(a[idx(a, "shutdown")]["pos"], [3, 0])
-        self.assertEqual(a[idx(a, "neustart")]["pos"], [3, 3])      # the deliberate empty row stays
-        self.assertTrue(no_overlap(a))
-
-    def test_status_sharing_a_row_keeps_positions(self):
-        ts = [_gap("online_status", "mittel", 0, 0), _gap("boot", "klein", 2, 0),
-              _gap("shutdown", "klein", 0, 1)]
-        h = self.host(ts)
-        tiles.migrate_host(h)
-        a = h["aktionen"]
-        self.assertFalse(a[idx(a, "online_status")]["sichtbar"])
-        self.assertEqual(a[idx(a, "boot")]["pos"], [2, 0])
-        self.assertEqual(a[idx(a, "shutdown")]["pos"], [0, 1])
-
-    def test_current_revision_respects_user_choice(self):
-        ts = tiles.copy_tiles(tiles.OLD_TEMPLATES["standard"])     # status tiles shown again on purpose
-        h = self.host(ts, rev=tiles.LAYOUT_REV)
-        tiles.migrate_host(h)
-        a = h["aktionen"]
-        self.assertTrue(a[idx(a, "online_status")]["sichtbar"])
-        # the Steam status tile no longer exists: dropped, its row is kept (online_status is in it)
-        self.assertFalse(any(isinstance(x, dict) and x.get("typ") == "steam_status" for x in a))
-        self.assertEqual(a[idx(a, "boot")]["pos"], [0, 1])
 
     def test_unknown_kept_non_dict_dropped(self):
         web = {"typ": "web_link", "sichtbar": True, "groesse": "breit", "pos": [0, 5], "url": "http://nas"}
-        h = self.host([*tiles.OLD_TEMPLATES["gaming"], web, "garbage", 7, None, ["boot"]])
+        h = self.host([*old("gaming"), web, "garbage", 7, None, ["boot"]])
         tiles.migrate_host(h)
         self.assertIn(web, h["aktionen"])
         self.assertTrue(all(isinstance(x, dict) for x in h["aktionen"]))

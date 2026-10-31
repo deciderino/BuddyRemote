@@ -3,7 +3,43 @@
 All notable changes to BuddyRemote are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versions are plain numbers (`1.0`, `1.2`, `1.3`); there was no 1.1 release.
+Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 release.
+
+## [Unreleased]
+
+## [1.3.1] - 2026-10-31
+
+### Highlights
+
+- **Bring your own MoonDeck CLI.** BuddyRemote still ships with its own CLI, but you can now pick a different one in Settings → Files. If it ever fails, BuddyRemote quietly falls back to the bundled one and tells you.
+- **Updates at a glance.** Settings → Updates shows BuddyRemote and the MoonDeck CLI side by side, with one "Check now" button. A newer CLI is only announced, never downloaded.
+- **Clear hint when Buddy doesn't match.** If MoonDeck Buddy on the host speaks a different version, the card turns orange and tells you which side to update. Only Start Steam is paused; wake and shut down keep working.
+- **Leaner AppImage.** The CLI now runs straight from the AppImage instead of being copied to your settings folder.
+- **Your setup is kept.** Just replace the AppImage; nothing changes for pairing, wake or shut down.
+
+
+### Added
+
+- **Use a custom MoonDeck CLI (Options → Files).** The bundled CLI stays the default. "Choose custom CLI …" checks the file right away (it must start and report a version); a file that does not start is rejected and nothing changes. "Back to the bundled CLI" switches back. If the custom CLI later fails to start or is gone, BuddyRemote falls back to the bundled one, shows an amber note with a **Settings** button and keeps your choice; the status bar then shows "Custom CLI ⚠". Works in the AppImage and from source.
+- **Options → Updates shows BuddyRemote and the MoonDeck CLI side by side** (one below the other in a narrow window), with one "Check now" button, "Last checked" and the states "checking …" and "check failed". The CLI check is part of the existing update check: it compares the MoonDeck nightly with the bundled CLI and only shows a note with a **Release page** button – nothing is downloaded (a newer CLI comes with the next BuddyRemote update). The automatic note appears once per new nightly. If the app and the CLI are both newer, you get one combined note. With a custom CLI active the check still refers to the bundled CLI.
+- **Buddy version mismatch warning.** BuddyRemote reads the Buddy API version (`/apiVersion`, expected: 9) and also recognises the CLI's "MoonDeck/Buddy needs update!". On a mismatch the host gets an orange dot, a hint line with "ⓘ Details" that says which side needs updating (Buddy on the host is older → update Buddy; Buddy is newer → update BuddyRemote), and only **Start Steam** is disabled (with a tooltip). Wake, shut down, restart, standby and hibernate keep working. No blinking, no pop-ups.
+
+### Changed
+
+- **AppImage: the MoonDeck CLI runs straight from the AppImage.** It is no longer copied to `~/.config/BuddyRemote/cli/`. Every AppImage therefore uses exactly the CLI it was built and checked with. The CLI starts in `~/.config/BuddyRemote/` and gets your own `LD_LIBRARY_PATH` back (like `ping` already did), not the AppImage's internal libraries. A `cli/` folder left there by 1.3 is no longer used; BuddyRemote leaves it alone and you can delete it.
+- **Options → MoonDeck CLI** reads the version info only from the AppImage.
+- **Default settings file.** The shipped first-start defaults are now `packaging/default-config.json`. Your own `config.json` (and `cli/`, `.attributed`, `.instance.lock`, the log and `window.ini`) is no longer part of the repository and is ignored by git. Running from source, `config.json` is created from the defaults on first start.
+- **"Start minimized" is off by default** everywhere, also for a settings file without this option (it already was for new installs). Turn it on in Options if you want it.
+- **Language "automatic"** is decided in one place for the start and the Options dialog (same behaviour as before).
+
+### Removed
+
+- Leftovers from the 1.3 development: the unused compact mode, the old status-update path, unused helpers and translation strings (`status`, `unknown`, `online`, `offline`, `error` in all eight languages), and the layout migration steps for draft-only layouts that were never released. Hosts from 1.2 still get a template; 1.3 layouts are kept as they are.
+- Running from source: the old `cli/cli.py` fallback. The CLI binary from the first-start download is used, as before.
+
+### Upgrading from source
+
+- `config.json` is no longer tracked. If you changed it in your checkout, back it up before `git pull` (git refuses to overwrite it otherwise), then put it back.
 
 ## [1.3] - 2026-10-31
 
@@ -164,6 +200,8 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`); there was no 1.1 release.
 
 - First release: a Linux GUI for MoonDeck Buddy with wake, shut down, restart and suspend, pairing with automatic MAC detection, multiple hosts, a tray icon, an automatic MoonDeck CLI download with checksum verification, and optional logging.
 
-[1.3]: https://github.com/deciderino/BuddyRemote/compare/1.2...HEAD
+[Unreleased]: https://github.com/deciderino/BuddyRemote/compare/1.3.1...HEAD
+[1.3.1]: https://github.com/deciderino/BuddyRemote/compare/1.3...1.3.1
+[1.3]: https://github.com/deciderino/BuddyRemote/compare/1.2...1.3
 [1.2]: https://github.com/deciderino/BuddyRemote/compare/1.0...1.2
 [1.0]: https://github.com/deciderino/BuddyRemote/releases/tag/1.0

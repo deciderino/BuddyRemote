@@ -5,6 +5,7 @@ Runs offscreen on a copy of the app in a temporary directory (config.json lives 
 to app.py), with the CLI, ping and Buddy calls stubbed out. Skipped without PyQt6.
     QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_ui -v
 """
+import glob
 import importlib.util
 import json
 import os
@@ -31,11 +32,39 @@ app = qa = TMP = None
 OLD_HOME = os.environ.get("HOME")
 
 
+# app.py was split into modules (1.3.1); each load must import them from the copy, fresh.
+SPLIT_MODULES = ("paths", "i18n", "config", "backend", "platform_util", "theme", "gamepad", "dialogs")
+
+
+def purge_split_modules():
+    for m in SPLIT_MODULES:
+        sys.modules.pop(m, None)
+
+
+class AppView:
+    """app.py plus the modules split out of it: reads look in app first, then in the split
+    modules; writes (stubs) go to app and to every split module that has the name."""
+    def __init__(self, mod):
+        object.__setattr__(self, "_mods", [mod] + [sys.modules[m] for m in SPLIT_MODULES
+                                                   if m in sys.modules])
+
+    def __getattr__(self, name):
+        for m in self._mods:
+            if hasattr(m, name):
+                return getattr(m, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        for i, m in enumerate(self._mods):
+            if i == 0 or hasattr(m, name):
+                setattr(m, name, value)
+
+
 def _config():
     names = ["Gaming-PC", "Workstation", "HTPC"]
     hosts = [{"id": f"h{i}", "name": names[i], "ip": f"192.0.2.{10 + i}",
               "mac": "00:00:5E:00:53:1%d" % i, "buddy_port": 59999} for i in range(3)]
-    hosts[1]["aktionen"] = tiles.copy_tiles(tiles.OLD_TEMPLATES["minimal"])       # 1.3 draft layout, rev 1
+    hosts[1]["aktionen"] = tiles.template("minimal")      # tile list without layout_rev
     hosts[2]["aktionen"] = tiles.template("server")
     hosts[2]["layout_rev"] = tiles.LAYOUT_REV
     return {"version": 1, "hosts": hosts,
@@ -49,8 +78,8 @@ def setUpModule():
     if not HAVE_QT:
         return
     TMP = tempfile.mkdtemp(prefix="br-ui-")
-    for f in ("app.py", "tiles.py", "cacerts.py"):
-        shutil.copy(os.path.join(ROOT, f), TMP)
+    for f in glob.glob(os.path.join(ROOT, "*.py")):
+        shutil.copy(f, TMP)
     shutil.copytree(os.path.join(ROOT, "lang"), os.path.join(TMP, "lang"))
     os.makedirs(os.path.join(TMP, "cli"))
     open(os.path.join(TMP, ".attributed"), "w").close()
@@ -58,8 +87,14 @@ def setUpModule():
         json.dump(_config(), fh)
     os.environ["HOME"] = os.path.join(TMP, "home")
     spec = importlib.util.spec_from_file_location("br_app_ui", os.path.join(TMP, "app.py"))
-    app = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(app)
+    mod = importlib.util.module_from_spec(spec)
+    purge_split_modules()
+    sys.path.insert(0, TMP)
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.remove(TMP)
+    app = AppView(mod)
     app.run_cli = lambda *a, **k: (0, "", "")
     app.ping_icmp = lambda *a, **k: False
     app.check_buddy_api = lambda *a, **k: (False, "x")
@@ -217,13 +252,13 @@ class EditModeTests(UiTestCase):
             return 0
         dlg_cls.exec = fake_exec
         try:
-            self.w.host_rows["h0"].mgmt_buttons[0].click()
+            self.w.host_rows["h0"].conn_btn.click()
             pump()
         finally:
             dlg_cls.exec = orig_exec
         self.assertEqual(seen.get("title"), app.t("conn_title"))
         self.assertIsNone(seen.get("tpl"), "no tile editing in the connection dialog")
-        self.assertEqual([b.text() for b in self.w.host_rows["h0"].mgmt_buttons], ["⚙"], "↑ ↓ are gone (cards are dragged in edit mode)")
+        self.assertEqual(card_buttons(self.w.host_rows["h0"]), ["⚙"], "↑ ↓ are gone (cards are dragged in edit mode)")
 
 
 class CalmStatusTests(UiTestCase):
@@ -231,7 +266,9 @@ class CalmStatusTests(UiTestCase):
         css = row.dot.styleSheet()
         return css.split("background:")[1].split(";")[0].strip()
 
-    def test_migration_hides_status_tiles(self):
+    def test_migration_status_tiles_hidden(self):
+        """1.2 host (h0) gets the template, a list without layout_rev (h1) the current
+        revision; the status tiles are hidden by default in both."""
         for hid in ("h0", "h1"):
             ts = self.host(hid)["aktionen"]
             for typ in tiles.STATUS_TYPES:
@@ -302,6 +339,11 @@ def saved():
         return json.load(fh)
 
 
+def card_buttons(row):
+    """Texts of the card's own management buttons (only ⚙ since 1.3)."""
+    return [b.text() for b in row.findChildren(app.QPushButton) if b.property("mgmt")]
+
+
 def ini(key):
     from PyQt6.QtCore import QSettings
     return QSettings(os.path.join(TMP, "window.ini"), QSettings.Format.IniFormat).value(key)
@@ -335,7 +377,7 @@ class CardReorderTests(UiTestCase):
 
     def test_arrows_gone_only_gear(self):
         for r in self.w.host_rows.values():
-            self.assertEqual([b.text() for b in r.mgmt_buttons], ["⚙"])
+            self.assertEqual(card_buttons(r), ["⚙"])
 
     def test_drag_card_in_edit_mode(self):
         from PyQt6.QtCore import QPoint
@@ -974,6 +1016,25 @@ class Review4Tests(UiTestCase):
         w.cfg["settings"]["start_minimized"] = False
         self.assertFalse(w.start_hidden())
 
+    def test_start_minimized_default_off(self):
+        """1.3.1: "Start minimized" is off unless the user turns it on (defaults,
+        seed file, a config without the key, the Options checkbox)."""
+        self.assertIs(app.DEFAULT_CONFIG["settings"]["start_minimized"], False)
+        with open(os.path.join(ROOT, "packaging", "default-config.json"), encoding="utf-8") as fh:
+            self.assertIs(json.load(fh)["settings"]["start_minimized"], False)
+        w = self.w
+        self._tray(True)
+        saved = w.cfg["settings"].pop("start_minimized", None)
+        try:
+            self.assertFalse(w.start_hidden(), "missing key: shown")
+            dlg = app.OptionsDialog(w.cfg["settings"], w)
+            try:
+                self.assertFalse(dlg.start_min.isChecked())
+            finally:
+                dlg.deleteLater()
+        finally:
+            w.cfg["settings"]["start_minimized"] = saved
+
     def test_empty_start_minimized_stays_visible(self):
         cfg = _config()
         cfg["hosts"] = []
@@ -1087,6 +1148,267 @@ class Review4Tests(UiTestCase):
             dlg.hide()
             dlg.deleteLater()
             pump()
+
+
+MM_OLD = dict(READY, steam=None, api=8, api_mismatch={"host": 8, "want": 9, "dir": "host_old"})
+MM_NEW = dict(READY, steam=None, api=10, api_mismatch={"host": 10, "want": 9, "dir": "host_new"})
+CLI_OK_SH = "#!/bin/sh\necho 'usage: moondeck-cli [-h]'\nexit 0\n"
+CLI_BAD_SH = "#!/bin/sh\nexit 3\n"
+
+
+class Release131Tests(UiTestCase):
+    """1.3.1: Buddy API mismatch, custom MoonDeck CLI, combined update check."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmpd = tempfile.mkdtemp(prefix="br-cli-")
+        self.dlgs = []
+        self.urls = []
+        self._open = app.QDesktopServices.openUrl
+        app.QDesktopServices.openUrl = staticmethod(lambda u: self.urls.append(u.toString()) or True)
+
+    def tearDown(self):
+        app.QDesktopServices.openUrl = self._open
+        app.backend.set_custom_cli("")
+        self.w._options_dlg = None
+        for dlg in self.dlgs:
+            dlg.hide()
+            dlg.deleteLater()
+        pump()
+        super().tearDown()
+        shutil.rmtree(self.tmpd, ignore_errors=True)
+
+    def script(self, name, body):
+        path = os.path.join(self.tmpd, name)
+        with open(path, "w") as fh:
+            fh.write(body)
+        os.chmod(path, 0o755)
+        return path
+
+    def colour(self, row):
+        return row.dot.styleSheet().split("background:")[1].split(";")[0].strip()
+
+    def steam_and_others(self, row):
+        steam = [b for a, b in row.action_buttons if a == "steam"]
+        other = [b for a, b in row.action_buttons if a not in ("steam", "wake")]
+        return steam, other
+
+    # --- (B) mismatch -------------------------------------------------------------
+    def check_mismatch(self, res, hint_key, why_key, fix_key):
+        w = self.w
+        w.on_host_status("h0", res)
+        pump()
+        row = w.host_rows["h0"]
+        c = app.ui_colors(row._light())
+        self.assertEqual(self.colour(row), c["warn"])                  # orange, not green
+        self.assertTrue(row.hint_row.isVisible())
+        self.assertTrue(row.details_btn.isVisible())
+        self.assertEqual(row.hint_lbl.text(), app.t(hint_key) + " ·")
+        steam, other = self.steam_and_others(row)
+        self.assertTrue(steam, "host has a Steam tile")
+        for b in steam:                                                # only Steam greyed out …
+            self.assertFalse(b.isEnabled())
+            self.assertEqual(b.toolTip(), app.t(why_key))
+        for b in other:                                                # … the rest stays usable
+            self.assertTrue(b.isEnabled(), b.text())
+        mm = res["api_mismatch"]
+        tip = row.dot.toolTip()
+        self.assertIn(app.t("st_mismatch", host=mm["host"], want=mm["want"]), tip)
+        self.assertIn(app.t("st_api_bad", host=mm["host"], want=mm["want"]), tip)
+        self.assertIn(app.t(fix_key), tip)
+        w.on_host_status("h0", READY)                                  # fixed: back to normal
+        pump()
+        self.assertEqual(self.colour(row), c["online"])
+        self.assertFalse(row.hint_row.isVisible())
+        self.assertTrue(all(b.isEnabled() for b in steam))
+
+    def test_mismatch_host_older(self):
+        self.check_mismatch(MM_OLD, "hint_buddy_old", "why_mismatch_old", "st_api_fix_old")
+
+    def test_mismatch_host_newer(self):
+        self.check_mismatch(MM_NEW, "hint_buddy_new", "why_mismatch_new", "st_api_fix_new")
+
+    def run_check(self, body, cli=(0, '{"running": false}', "")):
+        calls = []
+        old = (app.check_buddy_api, app.run_cli)
+        got = []
+        app.check_buddy_api = lambda *a, **k: (True, body)
+        app.run_cli = lambda *a, **k: calls.append(a) or cli
+        self.w.signals.host_status.connect(lambda hid, res: got.append(res))
+        try:
+            self.w._check_host(self.host("h0"))
+            pump()
+        finally:
+            app.check_buddy_api, app.run_cli = old
+        return got[-1], calls
+
+    def test_check_host_reads_api_version(self):
+        res, calls = self.run_check('{"version": 8}')
+        self.assertEqual(res["api"], 8)
+        self.assertEqual(res["api_mismatch"]["dir"], "host_old")
+        self.assertEqual(calls, [], "no steam status against a mismatching Buddy")
+        res, calls = self.run_check('{"version": 10}')
+        self.assertEqual(res["api_mismatch"]["dir"], "host_new")
+        res, calls = self.run_check('{"version": 9}')
+        self.assertIsNone(res["api_mismatch"])
+        self.assertEqual(len(calls), 1)
+
+    def test_check_host_cli_needs_update(self):
+        res, _ = self.run_check("not json", cli=(1, "", "MoonDeck/Buddy needs update!"))
+        self.assertEqual(res["api_mismatch"]["dir"], "unknown")
+        self.assertIsNone(res["steam"])
+        self.w.on_host_status("h0", res)
+        pump()
+        row = self.w.host_rows["h0"]
+        self.assertEqual(row.hint_lbl.text(), app.t("hint_buddy_mismatch") + " ·")
+        self.assertIn(app.t("st_mismatch_unknown"), row.dot.toolTip())
+
+    # --- update check ---------------------------------------------------------------
+    def result(self, app_new=False, cli_new=False, manual=False, cli_ok=True):
+        res = {"ok": True, "manual": manual, "version": "9.9.9" if app_new else app.APP_VERSION,
+               "url": "https://example.invalid/app", "newer": app_new}
+        res["cli"] = ({"ok": True, "newer": cli_new, "commit": "abc1234", "url": "https://example.invalid/cli"}
+                      if cli_ok else {"ok": False, "error": "offline"})
+        return res
+
+    def test_combined_toast(self):
+        w = self.w
+        w.on_update_result(self.result(app_new=True, cli_new=True))
+        pump()
+        self.assertTrue(w.update_toast.isVisible())
+        self.assertIn(app.t("update_both_title", version="9.9.9"), w.update_toast.title.text())
+        self.assertEqual(w.update_toast.dl_btn.text(), app.t("update_download"))
+        w.update_toast.dl_btn.click()
+        self.assertEqual(self.urls, ["https://example.invalid/app"])
+
+    def test_cli_only_toast_once(self):
+        w = self.w
+        w.on_update_result(self.result(cli_new=True))
+        pump()
+        self.assertTrue(w.update_toast.isVisible())
+        self.assertIn(app.t("cli_update_title"), w.update_toast.title.text())
+        self.assertIn("nightly abc1234", w.update_toast.detail.text())
+        self.assertEqual(w.update_toast.dl_btn.text(), app.t("cli_release_page"))
+        w.update_toast.dl_btn.click()
+        self.assertEqual(self.urls, ["https://example.invalid/cli"])
+        self.assertFalse(w.update_toast.isVisible())
+        w._pending_update = None
+        w.on_update_result(self.result(cli_new=True))                   # automatic again: quiet
+        pump()
+        self.assertFalse(w.update_toast.isVisible())
+        w.on_update_result(self.result(cli_new=True, manual=True))      # manual: always
+        pump()
+        self.assertTrue(w.update_toast.isVisible())
+
+    def test_manual_nothing_new_and_dialog_state(self):
+        w = self.w
+        w.on_update_result(self.result(manual=True))
+        pump()
+        self.assertTrue(w.toast.isVisible())
+        self.assertIn(app.t("update_current_both", version=app.APP_VERSION), w.toast.title.text())
+        st = w.update_state()
+        self.assertEqual((st["app"], st["cli"]), ("current", "current"))
+        w.on_update_result(self.result(cli_ok=False))
+        self.assertEqual(w.update_state()["cli"], "error")
+
+    # --- options ----------------------------------------------------------------------
+    def dialog(self, **extra):
+        dlg = app.OptionsDialog(dict(self.w.cfg["settings"], **extra), self.w)
+        self.w._options_dlg = dlg
+        dlg.show()
+        pump()
+        self.dlgs.append(dlg)
+        return dlg
+
+    def test_options_update_boxes(self):
+        w = self.w
+        w.on_update_result(self.result(app_new=True, cli_new=True))
+        dlg = self.dialog()
+        self.assertGreaterEqual(dlg.update_btn.height(), 48)
+        self.assertEqual(dlg.update_btn.text(), app.t("check_updates_now"))
+        self.assertIn(app.t("update_available", version="9.9.9"), dlg.upd_app_status.text())
+        self.assertTrue(dlg.upd_dl_row.isVisible())
+        self.assertIn(app.t("upd_cli_newer", label="nightly abc1234"), dlg.upd_cli_status.text())
+        self.assertTrue(dlg.upd_cli_note.isVisible())
+        dlg.refresh_updates(dict(w.update_state(), checking=True))
+        self.assertFalse(dlg.update_btn.isEnabled())
+        self.assertEqual(dlg.upd_app_status.text(), app.t("update_checking"))
+        dlg.refresh_updates(dict(w.update_state(), app="error", cli="error"))
+        self.assertEqual(dlg.upd_cli_status.text(), app.t("update_res_error"))
+        self.assertTrue(dlg.update_btn.isEnabled())
+        from PyQt6.QtGui import QResizeEvent
+        boxes = dlg.upd_boxes
+        boxes.resizeEvent(QResizeEvent(app.QSize(500, 200), boxes.size()))   # narrow: stacked
+        self.assertTrue(boxes.stacked())
+        boxes.resizeEvent(QResizeEvent(app.QSize(800, 200), boxes.size()))
+        self.assertFalse(boxes.stacked())
+
+    def test_options_cli_bundled_pick_reject_and_back(self):
+        dlg = self.dialog()
+        self.assertEqual(dlg.custom_cli_view(), "bundled")
+        self.assertTrue(dlg.cli_title.text().startswith(app.t("cli_bundled_paren", label=app.backend.bundled_cli_label())))
+        self.assertFalse(dlg.cli_back_btn.isVisible())
+        bad = self.script("bad-cli", CLI_BAD_SH)
+        dlg._pick_cli_file = lambda: bad
+        dlg.cli_choose_btn.click()
+        pump()
+        self.assertTrue(dlg.cli_err.isVisible())                        # rejected, not taken over
+        self.assertEqual(dlg.get_settings()["custom_cli"], "")
+        good = self.script("good-cli", CLI_OK_SH)
+        dlg._pick_cli_file = lambda: good
+        dlg.cli_choose_btn.click()
+        pump()
+        self.assertFalse(dlg.cli_err.isVisible())
+        self.assertEqual(dlg.custom_cli_view(), "active")
+        self.assertEqual(dlg.cli_title.text(), "⚠ " + app.t("cli_custom_active"))
+        self.assertEqual(dlg.cli_path_lbl.text(), good)
+        self.assertIn(app.backend.sha256_file(good)[:8], dlg.cli_sha_lbl.text())
+        self.assertTrue(dlg.cli_note.isVisible())                       # applied on save
+        self.assertTrue(dlg.upd_cli_link.isVisible())                   # U3 box
+        self.assertIn(app.t("cli_custom_active"), dlg.upd_cli_version.text())
+        self.assertEqual(dlg.get_settings()["custom_cli"], good)
+        dlg.cli_back_btn.click()
+        pump()
+        self.assertEqual(dlg.get_settings()["custom_cli"], "")
+        self.assertEqual(dlg.custom_cli_view(), "bundled")
+
+    def test_options_cli_failed_and_missing(self):
+        bad = self.script("bad-cli", CLI_BAD_SH)
+        app.backend.set_custom_cli(bad)
+        app.backend.active_cli()                                       # probe -> failed
+        pump()
+        dlg = self.dialog(custom_cli=bad)
+        self.assertEqual(dlg.custom_cli_view(), "failed")
+        self.assertEqual(dlg.cli_title.text(), "⚠ " + app.t("cli_custom_failed"))
+        self.assertIn(app.ui_colors(self.w._light())["err"], dlg.cli_title.styleSheet())
+        self.assertFalse(dlg.cli_note.isVisible())
+        gone = os.path.join(self.tmpd, "gone")
+        dlg2 = self.dialog(custom_cli=gone)
+        self.assertEqual(dlg2.custom_cli_view(), "missing")
+        self.assertEqual(dlg2.cli_title.text(), "⚠ " + app.t("cli_custom_missing"))
+        self.assertEqual(dlg2.get_settings()["custom_cli"], gone)     # the setting is kept
+
+    # --- custom CLI at runtime ------------------------------------------------------------
+    def test_failed_custom_cli_toast_and_status_bar(self):
+        w = self.w
+        bad = self.script("bad-cli", CLI_BAD_SH)
+        app.backend.set_custom_cli(bad)
+        self.assertEqual(app.backend.active_cli(), app.backend.CLI_BIN)   # falls back to bundled
+        pump()
+        self.assertTrue(w.toast.isVisible())
+        self.assertIn(app.t("cli_custom_failed"), w.toast.title.text())
+        self.assertTrue(w.toast.action_btn.isVisible())
+        self.assertEqual(w.toast.action_btn.text(), app.t("toast_settings"))
+        self.assertEqual(w.cli_lbl.text(), app.t("cli_custom_status"))
+        self.assertIn(bad, w.cli_lbl.toolTip())
+        self.assertIn(app.t("cli_custom_failed"), w.cli_lbl.toolTip())
+        w.toast.hide()
+        w.on_cli_state("failed", bad, "again")                            # same state: no second toast
+        pump()
+        self.assertFalse(w.toast.isVisible())
+        app.backend.set_custom_cli("")
+        w._update_status_bar()
+        self.assertTrue(w.cli_lbl.text().startswith("MoonDeck CLI"))
 
 
 if __name__ == "__main__":
