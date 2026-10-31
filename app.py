@@ -59,6 +59,7 @@ PACKAGED = bool(getattr(sys, "frozen", False) or os.environ.get("APPIMAGE"))
 if PACKAGED:
     APP_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "BuddyRemote"
 CONFIG_FILE = APP_DIR / "config.json"
+SEED_CONFIG = RES_DIR / "packaging" / "default-config.json"   # first-start defaults
 CLI_DIR = APP_DIR / "cli"
 CLI_BIN = CLI_DIR / "moondeck-cli"
 CLI_SCRIPT = CLI_DIR / "cli.py"  # fallback
@@ -68,13 +69,17 @@ LOG_FILE = APP_DIR / "buddyremote.log"
 WINDOW_STATE_FILE = APP_DIR / "window.ini"  # UI only: size/maximized/position
 
 # ---------------------------------------------------------------------------
+def seed_config():
+    """First start: copy the shipped defaults (packaging/default-config.json, also inside
+    the bundle) to config.json. The user's config.json itself is not part of the repo."""
+    if not CONFIG_FILE.exists() and SEED_CONFIG.is_file():
+        shutil.copyfile(SEED_CONFIG, CONFIG_FILE)
+
 def prepare_packaged_dir():
     """Packaging only: create the user dir and seed it from the bundle on first start."""
     if not PACKAGED:
         return
     APP_DIR.mkdir(parents=True, exist_ok=True)
-    if not CONFIG_FILE.exists() and (RES_DIR / "config.json").exists():
-        shutil.copyfile(RES_DIR / "config.json", CONFIG_FILE)
     bundled_cli = RES_DIR / "bundled" / "moondeck-cli"
     bundled_ver = RES_DIR / "bundled" / "moondeck-cli.version"
     local_ver = CLI_DIR / "moondeck-cli.version"
@@ -6498,6 +6503,7 @@ class DownloadDialog(QDialog):
 
 def main():
     prepare_packaged_dir()
+    seed_config()
 
     # UI only: fractional display scaling (125 %, 150 %, ...) is used as-is instead of
     # being rounded to whole numbers. This is already the Qt 6 default; set explicitly
