@@ -210,3 +210,229 @@ class CliResolutionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- 1.3.1: custom CLI, Buddy API mismatch, CLI update check ---------------------------
+GOOD_CLI = """#!/bin/sh
+if [ "$1" = "--help" ]; then echo "usage: moondeck-cli [-h] ..."; exit 0; fi
+printf '%s\\n' "$@" > "$0.args"
+echo custom
+"""
+BAD_CLI = """#!/bin/sh
+echo "Segmentation fault" >&2
+exit 139
+"""
+
+
+@unittest.skipUnless(HAVE_QT and sys.platform.startswith("linux"), "PyQt6 / Linux only")
+class CustomCliTests(unittest.TestCase):
+    setUp = CliResolutionTests.setUp            # same temp copy / packaged helpers
+    tearDown = CliResolutionTests.tearDown
+    packaged = CliResolutionTests.packaged
+    fake_cli = CliResolutionTests.fake_cli
+
+    def script(self, path, text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        path.chmod(0o755)
+        return path
+
+    def setup_pkg(self):
+        self.fake_cli(self.bundle / "bundled" / "moondeck-cli")
+        a = self.packaged()
+        a.prepare_packaged_dir()
+        self.events = []
+        a.set_cli_listener(lambda *ev: self.events.append(ev))
+        self.addCleanup(a.set_cli_listener, None)
+        self.addCleanup(a.set_custom_cli, "")
+        return a
+
+    def test_default_is_bundled(self):
+        a = self.setup_pkg()
+        self.assertEqual(a.active_cli(), a.CLI_BIN)
+        self.assertEqual(a.custom_cli_state()[0], "off")
+        self.assertEqual(a.run_cli(["x"], timeout=10)[1].strip(), '{"ok": true}')
+
+    def test_custom_used_when_it_starts(self):
+        a = self.setup_pkg()
+        good = self.script(self.tmp / "my" / "moondeck-cli", GOOD_CLI)
+        a.set_custom_cli(str(good))
+        self.assertEqual(a.active_cli(), good)
+        self.assertEqual(a.custom_cli_state()[0], "ok")
+        rc, out, _ = a.run_cli(["host", "list"], timeout=10)
+        self.assertEqual((rc, out.strip()), (0, "custom"))
+        self.assertEqual(self.events, [("ok", str(good), "")])
+        a.active_cli()
+        self.assertEqual(len(self.events), 1, "probed once per file version")
+
+    def test_custom_that_does_not_start_falls_back(self):
+        a = self.setup_pkg()
+        bad = self.script(self.tmp / "my" / "bad-cli", BAD_CLI)
+        a.set_custom_cli(str(bad))
+        rc, out, _ = a.run_cli(["host", "list"], timeout=10)
+        self.assertEqual(out.strip(), '{"ok": true}', "bundled CLI ran")
+        state, reason = a.custom_cli_state()
+        self.assertEqual(state, "failed")
+        self.assertIn("139", reason)
+        self.assertEqual([e[0] for e in self.events], ["failed"])
+        self.assertEqual(a.custom_cli_path(), str(bad), "the setting is kept")
+        a.run_cli(["host", "list"], timeout=10)
+        self.assertEqual(len(self.events), 1, "no repeated warning")
+        # fixed file (new mtime/size) -> probed again and used
+        self.script(bad, GOOD_CLI)
+        os.utime(bad, ns=(1, 2))
+        self.assertEqual(a.active_cli(), bad)
+        self.assertEqual(self.events[-1][0], "ok")
+
+    def test_not_executable_falls_back(self):
+        a = self.setup_pkg()
+        f = self.tmp / "my" / "plain.txt"
+        f.parent.mkdir(parents=True)
+        f.write_text("not a program")
+        a.set_custom_cli(str(f))
+        rc, out, _ = a.run_cli(["x"], timeout=10)
+        self.assertEqual(out.strip(), '{"ok": true}')
+        self.assertEqual(a.custom_cli_state()[0], "failed")
+
+    def test_missing_file_falls_back_and_keeps_setting(self):
+        a = self.setup_pkg()
+        good = self.script(self.tmp / "my" / "moondeck-cli", GOOD_CLI)
+        a.set_custom_cli(str(good))
+        self.assertEqual(a.active_cli(), good)
+        good.unlink()
+        rc, out, _ = a.run_cli(["x"], timeout=10)
+        self.assertEqual(out.strip(), '{"ok": true}')
+        self.assertEqual(a.custom_cli_state()[0], "missing")
+        self.assertEqual(a.custom_cli_path(), str(good))
+        self.assertEqual([e[0] for e in self.events], ["ok", "missing"])
+        self.script(good, GOOD_CLI)          # back again
+        self.assertEqual(a.active_cli(), good)
+
+    def test_start_error_after_probe_reruns_bundled(self):
+        a = self.setup_pkg()
+        good = self.script(self.tmp / "my" / "moondeck-cli", GOOD_CLI)
+        a.set_custom_cli(str(good))
+        self.assertEqual(a.active_cli(), good)
+        real = a._exec_cli
+        calls = []
+
+        def flaky(cli, *rest):
+            calls.append(cli)
+            if cli == good:
+                raise PermissionError(13, "Permission denied")
+            return real(cli, *rest)
+        a._exec_cli = flaky                  # AppView: lands in backend, where run_cli looks
+        try:
+            rc, out, _ = a.run_cli(["x"], timeout=10)
+        finally:
+            a._exec_cli = real
+        self.assertEqual(calls, [good, a.CLI_BIN])
+        self.assertEqual(out.strip(), '{"ok": true}')
+        self.assertEqual(a.custom_cli_state()[0], "failed")
+
+    def test_cli_available_with_custom_only(self):
+        a = self.packaged()                 # nothing bundled
+        a.prepare_packaged_dir()
+        self.addCleanup(a.set_custom_cli, "")
+        self.assertFalse(a.cli_available())
+        good = self.script(self.tmp / "my" / "moondeck-cli", GOOD_CLI)
+        a.set_custom_cli(str(good))
+        self.assertTrue(a.cli_available())
+        self.assertEqual(a.run_cli(["x"], timeout=10)[1].strip(), "custom")
+
+    def test_source_mode_custom(self):
+        a = load_app("br_cli_src_custom", self.src)
+        self.addCleanup(a.set_custom_cli, "")
+        self.fake_cli(self.src / "cli" / "moondeck-cli")
+        bad = self.script(self.tmp / "my" / "bad", BAD_CLI)
+        a.set_custom_cli(str(bad))
+        self.assertEqual(a.run_cli(["x"], timeout=10)[1].strip(), '{"ok": true}')
+        good = self.script(self.tmp / "my" / "good", GOOD_CLI)
+        a.set_custom_cli(str(good))
+        self.assertEqual(a.run_cli(["x"], timeout=10)[1].strip(), "custom")
+
+    def test_probe(self):
+        a = load_app("br_cli_probe", self.src)
+        self.assertEqual(a.probe_cli(self.script(self.tmp / "g", GOOD_CLI)), (True, ""))
+        ok, why = a.probe_cli(self.tmp / "nope")
+        self.assertFalse(ok)
+        self.assertTrue(why)
+        ok, why = a.probe_cli(self.fake_cli(self.tmp / "nousage"))
+        self.assertFalse(ok, "exit 0 without argparse usage is no MoonDeck CLI")
+
+    def test_config_default_and_sanitize(self):
+        a = load_app("br_cli_cfg", self.src)
+        self.assertEqual(a.DEFAULT_CONFIG["settings"]["custom_cli"], "")
+        data = {"hosts": [], "settings": {"custom_cli": 5}}
+        a.sanitize_config(data)
+        self.assertEqual(data["settings"]["custom_cli"], "")
+        data = {"hosts": [], "settings": {"custom_cli": "/opt/md/cli"}}
+        a.sanitize_config(data)
+        self.assertEqual(data["settings"]["custom_cli"], "/opt/md/cli")
+
+    # --- Buddy API -------------------------------------------------------------
+    def test_parse_api_version(self):
+        a = load_app("br_api", self.src)
+        self.assertEqual(a.parse_api_version('{"version": 9}'), 9)
+        self.assertEqual(a.parse_api_version('{"version": "8"}'), 8)
+        for bad in ("", "nope", "[]", '{"version": true}', '{"version": "x"}', '{}', None):
+            self.assertIsNone(a.parse_api_version(bad), bad)
+
+    def test_api_mismatch_both_directions(self):
+        a = load_app("br_api2", self.src)
+        self.assertIsNone(a.api_mismatch(9, want=9))
+        self.assertEqual(a.api_mismatch(8, want=9), {"host": 8, "want": 9, "dir": "host_old"})
+        self.assertEqual(a.api_mismatch(10, want=9), {"host": 10, "want": 9, "dir": "host_new"})
+        self.assertIsNone(a.api_mismatch(None, "all fine", want=9))
+        self.assertEqual(a.api_mismatch(None, "x MoonDeck/Buddy needs update! y", want=9)["dir"],
+                         "unknown")
+        self.assertIsNone(a.api_mismatch(9, "MoonDeck/Buddy needs update!", want=9),
+                          "a known matching version wins")
+
+    def test_expected_api_from_bundle(self):
+        a = self.packaged()
+        self.assertEqual(a.expected_buddy_api(), 9, "default")
+        (self.bundle / "bundled" / "moondeck-cli.version").write_text(
+            json.dumps({"version": "nightly", "commit": "00f8c31", "sha256": "ab", "buddy_api": 10}))
+        self.assertEqual(a.expected_buddy_api(), 10)
+        self.assertEqual(a.api_mismatch(9)["dir"], "host_old")
+        self.assertEqual(a.bundled_cli_label(), "nightly 00f8c31")
+
+    # --- CLI update check ------------------------------------------------------------
+    REL = {"html_url": "https://github.com/FrogTheFrog/moondeck/releases/tag/nightly",
+           "target_commitish": "4b1e9d2aa0000000000000000000000000000000",
+           "published_at": "2026-01-01T00:00:00Z",
+           "assets": [{"name": "moondeck-cli-linux.bin", "digest": "sha256:" + "ab" * 32},
+                      {"name": "moondeck-cli-win.exe", "digest": "sha256:" + "cd" * 32}]}
+
+    def test_parse_cli_release(self):
+        a = load_app("br_rel", self.src)
+        r = a.parse_cli_release(self.REL, "moondeck-cli-linux.bin")
+        self.assertEqual((r["digest"], r["commit"]), ("ab" * 32, "4b1e9d2"))
+        self.assertEqual(a.parse_cli_release(self.REL, "moondeck-cli-win.exe")["digest"], "cd" * 32)
+        self.assertEqual(a.cli_asset_name("win32"), "moondeck-cli-win.exe")
+        self.assertEqual(a.cli_asset_name("linux"), "moondeck-cli-linux.bin")
+        r = a.parse_cli_release({"target_commitish": "main", "html_url": "http://evil.example"},
+                                "moondeck-cli-linux.bin")
+        self.assertEqual((r["digest"], r["commit"], r["url"]), ("", "", a.CLI_RELEASE_PAGE))
+
+    def test_compare_cli_release(self):
+        a = load_app("br_rel2", self.src)
+        rel = a.parse_cli_release(self.REL, "moondeck-cli-linux.bin")
+        same = a.compare_cli_release("AB" * 32, rel)
+        self.assertEqual((same["ok"], same["newer"]), (True, False))
+        other = a.compare_cli_release("ef" * 32, rel)
+        self.assertEqual((other["ok"], other["newer"], other["commit"]), (True, True, "4b1e9d2"))
+        self.assertFalse(a.compare_cli_release("", rel)["ok"])
+        self.assertFalse(a.compare_cli_release("ab" * 32, {"digest": ""})["ok"])
+
+    def test_bundled_digest_ignores_custom(self):
+        cli = self.fake_cli(self.bundle / "bundled" / "moondeck-cli")
+        a = self.packaged()
+        self.addCleanup(a.set_custom_cli, "")
+        (self.bundle / "bundled" / "moondeck-cli.version").write_text(
+            json.dumps({"version": "nightly", "commit": "00f8c31", "sha256": "12" * 32}))
+        a.set_custom_cli(str(self.script(self.tmp / "my" / "c", GOOD_CLI)))
+        self.assertEqual(a.bundled_cli_digest(), "12" * 32, "packaged: pinned digest")
+        (self.bundle / "bundled" / "moondeck-cli.version").unlink()
+        self.assertEqual(a.bundled_cli_digest(), a.sha256_file(cli))

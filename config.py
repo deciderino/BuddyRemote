@@ -40,7 +40,8 @@ DEFAULT_CONFIG = {
         "theme": "Dark",
         "cli_verified": False,
         "cli_hash": "",
-        "cli_verified_at": ""
+        "cli_verified_at": "",
+        "custom_cli": ""            # 1.3.1: path of a custom MoonDeck CLI ("" = bundled)
     },
     "hosts": []
 }
@@ -113,6 +114,9 @@ def sanitize_config(data: dict) -> bool:
         if n != v or type(v) is not int:
             st[k] = n
             changed = True
+    if not isinstance(st.get("custom_cli", ""), str):
+        st["custom_cli"] = ""
+        changed = True
     return changed
 
 
