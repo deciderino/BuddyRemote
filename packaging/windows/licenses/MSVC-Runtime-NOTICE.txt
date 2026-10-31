@@ -1,0 +1,5 @@
+Microsoft Visual C++ runtime (vcruntime140.dll, vcruntime140_1.dll, msvcp140*.dll, ...)
+These DLLs ship with the Python for Windows and PyQt6-Qt6 distributions and are bundled
+unmodified as redistributable runtime files under the Microsoft Visual C++ Redistributable
+license terms (https://visualstudio.microsoft.com/license-terms/). If they are missing or
+outdated, install "Microsoft Visual C++ Redistributable 2015-2022 (x64)" from Microsoft.

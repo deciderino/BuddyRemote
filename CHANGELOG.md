@@ -7,6 +7,11 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 
 ## [Unreleased]
 
+### Added
+
+- **Windows preview (1.4-preview).** BuddyRemote runs on Windows 10/11 x64 as a ZIP with a folder you unpack (`BuddyRemote\BuddyRemote.exe`); the MoonDeck CLI (`moondeck-cli.exe`) is bundled. Settings live in `%APPDATA%\BuddyRemote`; "Start with the system" uses the per-user Run key; HTTPS checks use the Windows certificate store. The update check only offers releases that ship a Windows ZIP. Linux behaviour is unchanged.
+- Build: `packaging/windows/build.py` (Windows Python, PyInstaller onedir) and `build-windows.sh` (the same under Wine on Linux).
+
 ## [1.3.1] - 2026-10-31
 
 ### Highlights
