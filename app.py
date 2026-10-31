@@ -53,6 +53,7 @@ from theme import (touch_css, theme_palette, apply_app_theme, dialog_stylesheet,
                    accent_color)
 from gamepad import InputModeController, GamepadBridge
 from dialogs import install_dialog_nav, fit_dialog_to_screen, notify, OptionsDialog, DownloadDialog
+import backend  # 1.3.1: custom CLI state, Buddy API mismatch, CLI update check
 
 # ---------------------------------------------------------------------------
 class Signals(QObject):
@@ -60,6 +61,7 @@ class Signals(QObject):
     update_result = pyqtSignal(dict)      # result of MainWindow.check_for_updates
     action_started = pyqtSignal(str, str, str)  # host_id, name, action
     action_done = pyqtSignal(str, str, str, bool, str)  # host_id, name, action, success, message
+    cli_state = pyqtSignal(str, str, str)  # custom CLI: state ('ok'/'failed'/'missing'/'off'), path, reason
 
 # ---------------------------------------------------------------------------
 
@@ -622,12 +624,31 @@ class HostRow(QFrame):
             return "ready"
         return "warn" if r.get("ping") else "off"
 
+    def mismatch(self) -> dict | None:
+        """Buddy answers but speaks another API than the bundled CLI (1.3.1): only a
+        warning; Steam is greyed out, everything else stays usable."""
+        r = self.result
+        return r.get("api_mismatch") if r and r.get("buddy") else None
+
+    @staticmethod
+    def mismatch_text(mm: dict, kind: str) -> str:
+        """kind: hint / why / fix; text by direction (host older / newer / unknown)."""
+        d = {"host_old": "old", "host_new": "new"}.get(mm.get("dir"), "unknown")
+        key = {"hint": {"old": "hint_buddy_old", "new": "hint_buddy_new", "unknown": "hint_buddy_mismatch"},
+               "why": {"old": "why_mismatch_old", "new": "why_mismatch_new", "unknown": "why_mismatch_unknown"},
+               "fix": {"old": "st_api_fix_old", "new": "st_api_fix_new", "unknown": "st_api_fix_unknown"}}
+        return t(key[kind][d])
+
     def details_text(self) -> str:
         """Tooltip of dot and name (and ⓘ Details): state, ping, Buddy port, last check."""
         r = self.result
         kind = self.status_kind()
+        mm = self.mismatch()
         lines = [t({"ready": "st_ready", "warn": "st_warn", "off": "st_off",
                     "checking": "status_checking", "unknown": "status_unknown"}[kind])]
+        if mm:
+            lines = [t("st_mismatch", host=mm["host"], want=mm["want"]) if mm.get("host") is not None
+                     else t("st_mismatch_unknown")]
         ip = self.host.get("ip", "")
         if ip and not self._show_ip():
             lines.append(t("st_ip", ip=ip))       # IP hidden in the header: only here
@@ -637,6 +658,10 @@ class HostRow(QFrame):
             lines.append(t("st_ping_ok", ip=ip) if ping else
                          (t("st_ping_blocked", ip=ip) if buddy else t("st_ping_fail", ip=ip)))
             lines.append(t("st_buddy_ok", port=port) if buddy else t("st_buddy_fail", port=port))
+            if mm:
+                lines.append(t("st_api_bad", host=mm["host"], want=mm["want"]) if mm.get("host") is not None
+                             else t("st_api_bad_unknown", want=mm["want"]))
+                lines.append(self.mismatch_text(mm, "fix"))
             steam = r.get("steam") if buddy else None
             if steam and steam.get("running"):
                 lines.append(t("steam_bpm_hdr") if steam.get("bpm") else t("steam_running_hdr"))
@@ -678,6 +703,8 @@ class HostRow(QFrame):
             col = c["cur_b"]          # accent blue: action running
         elif self.failed:
             col = c["error"]
+        elif pc_on and buddy and self.mismatch():
+            col = c["warn"]          # orange: Buddy answers, but the version does not match
         elif pc_on and buddy:
             col = c["online"]
         elif pc_on:
@@ -708,8 +735,10 @@ class HostRow(QFrame):
             parts.append(t("no_mac_short"))
         self.time_lbl.setText(" · ".join(parts))
         problem = bool(r) and pc_on and not buddy
-        self.hint_row.setVisible(problem)
-        self.details_btn.setVisible(problem)
+        mm = self.mismatch()
+        self.hint_lbl.setText((self.mismatch_text(mm, "hint") if mm else t("hint_problem")) + " ·")
+        self.hint_row.setVisible(problem or bool(mm))
+        self.details_btn.setVisible(problem or bool(mm))
         # Steam toggle label
         closing = bool(self.steam_running)
         for b in self.steam_btns:
@@ -726,6 +755,7 @@ class HostRow(QFrame):
         """Variant A: everything visible; inapplicable actions disabled + not focusable.
         Without a result (first check pending, or automatic checks off) all stay enabled."""
         gate = bool(r) and self._auto()
+        mm = self.mismatch()
         want = {}
         for act, b in self.action_buttons:
             if act == "wake":
@@ -741,6 +771,8 @@ class HostRow(QFrame):
                 ok, why = True, ""
             elif act == "wake":
                 ok, why = not pc_on, t("why_pc_on")
+            elif act == "steam" and mm:
+                ok, why = False, self.mismatch_text(mm, "why")   # other actions stay clickable
             else:
                 ok, why = buddy, t("why_no_buddy")
             want[b] = ok
@@ -1052,6 +1084,11 @@ class Toast(QFrame):
         w = min(380, max(220, par.width() - 28))
         self.setFixedWidth(w)
         self.adjustSize()
+        # wrapped title + detail next to the action button: adjustSize alone can
+        # underestimate the height (detail clipped), so ask the layout for width w
+        h = self.layout().totalHeightForWidth(w) if self.layout().hasHeightForWidth() else -1
+        if h > self.height():
+            self.resize(w, h)
         bottom = getattr(par.window(), "_toast_bottom", lambda: par.height() - 14)()
         self.move(par.width() - w - 14, bottom - self.height())
 
@@ -1094,7 +1131,9 @@ class UpdateToast(QFrame):
         self.timer.timeout.connect(self.hide)
         self.hide()
 
-    def show_update(self, version: str, light: bool, ms: int = 30000):
+    def show_update(self, version: str, light: bool, ms: int = 30000, cli: str | None = None):
+        """version: new BuddyRemote version ('' = none); cli: label of a newer MoonDeck CLI
+        (None = none). Both at once: one combined toast."""
         if light:
             bg, b, fg, dim, btn, btn_b = "#e3f2fd", "#1565c0", "#0d47a1", "#37474f", "#1565c0", "#0d47a1"
         else:
@@ -1109,8 +1148,16 @@ class UpdateToast(QFrame):
             QPushButton#toastX {{ background: transparent; color: {dim}; border: 2px solid transparent; min-width: 0px; min-height: 0px; padding: 0px; font-size: 16px; }}
             QPushButton#toastX:focus {{ border: 2px solid {b}; }}
         """)
-        self.title.setText("ℹ  " + t("update_available", version=version))
-        self.detail.setText(t("update_detail", current=APP_VERSION))
+        if version and cli is not None:
+            title, detail = (t("update_both_title", version=version),
+                             t("update_both_detail", current=APP_VERSION))
+        elif version:
+            title, detail = t("update_available", version=version), t("update_detail", current=APP_VERSION)
+        else:
+            title, detail = t("cli_update_title"), t("cli_update_detail", label=cli or "nightly")
+        self.title.setText("ℹ  " + title)
+        self.detail.setText(detail)
+        self.dl_btn.setText(t("update_download") if version else t("cli_release_page"))
         self.place()
         self.show()
         self.raise_()
@@ -2527,6 +2574,12 @@ class MainWindow(QMainWindow):
         self._checking_lock = threading.Lock()
         self.signals.action_started.connect(self.on_action_started)
         self.signals.action_done.connect(self.on_action_done)
+        # custom MoonDeck CLI (Options › Dateien): state changes come from any thread
+        self.signals.cli_state.connect(self.on_cli_state)
+        self._cli_toast_for = None          # (state, path) the A4 toast was shown for
+        backend.set_cli_listener(self.signals.cli_state.emit)
+        backend.set_custom_cli(self.cfg["settings"].get("custom_cli", ""))
+        QTimer.singleShot(1500, self._probe_custom_cli)
         self.action_locks: dict[str, threading.Lock] = {}
         self.host_rows: dict[str, HostRow] = {}
         self.host_state: dict[str, dict] = {}   # last status check per host id (survives refresh_hosts)
@@ -4291,20 +4344,29 @@ class MainWindow(QMainWindow):
             box = {}
             tp = threading.Thread(target=lambda: box.update(ping=ping_icmp(h.get("ip", ""))), daemon=True)
             tp.start()
-            res["buddy"] = check_buddy_api(h.get("ip", ""), h.get("buddy_port", 59999), timeout=2.0)[0]
+            ok, body = check_buddy_api(h.get("ip", ""), h.get("buddy_port", 59999), timeout=2.0)
+            res["buddy"] = ok
+            # 1.3.1: Buddy API vs. the one the bundled CLI speaks (only a warning)
+            res["api"] = backend.parse_api_version(body) if ok else None
+            mm = backend.api_mismatch(res["api"]) if ok else None
             tp.join(8)
             res["ping"] = bool(box.get("ping"))
-            if res["buddy"]:
+            if res["buddy"] and not mm:
                 rc, out, err = self._run_cli_for_host(
                     h, ["steam", "status", "--json", "--buddy-timeout", "2"], timeout=15)
                 res["steam"] = parse_steam_status(out) if rc == 0 else None
                 if rc != 0:
                     logging.debug("steam status %s rc=%s %s", h.get("name"), rc, (err or out)[:200])
+                mm = backend.api_mismatch(None, f"{out or ''}\n{err or ''}")
+                if mm:
+                    res["steam"] = None
+            res["api_mismatch"] = mm
         except Exception:
             logging.exception("status check %s", h.get("name"))
         res["time"] = time.strftime("%H:%M:%S")
-        logging.info("Status %s: ping=%s buddy=%s steam=%s", h.get("name", h.get("ip")),
-                     res["ping"], res["buddy"], res["steam"])
+        logging.info("Status %s: ping=%s buddy=%s steam=%s%s", h.get("name", h.get("ip")),
+                     res["ping"], res["buddy"], res["steam"],
+                     f" api_mismatch={res['api_mismatch']}" if res.get("api_mismatch") else "")
         self.signals.host_status.emit(h["id"], res)
 
     def on_host_status(self, hid: str, res: dict):
@@ -4350,6 +4412,9 @@ class MainWindow(QMainWindow):
             notify(self, t(f"done_{action}", title=title), kind="ok")
         else:
             hint = t("hibernate_failed_hint") if action == "hibernate" else t("action_failed_hint")
+            mm = (r.mismatch() if r else None) or backend.api_mismatch(None, msg or "")
+            if mm:                                  # Buddy speaks another API: say what to update
+                hint = t("hint_buddy_mismatch") + " – " + HostRow.mismatch_text(mm, "fix")
             notify(self, t(f"failed_{action}", title=title), hint + f"\n\n{msg[:200]}", kind="error")
 
     def open_options(self):
@@ -4359,6 +4424,7 @@ class MainWindow(QMainWindow):
         self._options_dlg = None
         if accepted:
             new = dlg.get_settings()
+            cli_changed = new.get("custom_cli", "") != self.cfg["settings"].get("custom_cli", "")
             theme_changed = new.get("theme") != self.cfg["settings"].get("theme")
             lang_changed = resolve_language(new) != resolve_language(self.cfg["settings"])
             looks_changed = any(new.get(k, True) != self.cfg["settings"].get(k, True) for k in ("show_ip", "show_steam"))
@@ -4375,6 +4441,10 @@ class MainWindow(QMainWindow):
             else:
                 for r in self.host_rows.values():
                     r._render()           # button enablement depends on auto_status
+            if cli_changed:
+                backend.set_custom_cli(new.get("custom_cli", ""))
+                self._cli_toast_for = None
+                self._probe_custom_cli()
             self._update_status_bar()
             hints = ([t("theme_restart")] if theme_changed else []) + ([t("language_restart")] if lang_changed else [])
             notify(self, t("settings_saved"), "\n".join(hints), kind="ok")
@@ -4483,11 +4553,12 @@ class MainWindow(QMainWindow):
 
     # --- update check (reads the latest GitHub release; never downloads) ----------
     def check_for_updates(self, manual: bool = False):
+        """One check for BuddyRemote and the bundled MoonDeck CLI (at startup and on
+        "Jetzt prüfen"). Only reports; nothing is downloaded."""
         if self._update_running:
             return
         self._update_running = True
-        if self._options_dlg:
-            self._options_dlg.update_lbl.setText(t("update_checking"))
+        self._refresh_options_updates()
 
         def worker():
             try:
@@ -4499,18 +4570,36 @@ class MainWindow(QMainWindow):
                 logging.warning("Update check failed (%s; CA store: %s): %r", "certificate problem"
                                 if cert else "connection problem", cacerts.describe(), e)
                 res = {"ok": False, "manual": manual, "error": str(e)[:300], "cert": cert, "no_ca": no_ca}
+            try:        # the bundled CLI against the nightly asset (a custom CLI is not compared)
+                res["cli"] = backend.check_cli_update(timeout=10)
+            except Exception as e:
+                logging.warning("MoonDeck CLI update check failed: %r", e)
+                res["cli"] = {"ok": False, "error": str(e)[:300]}
             self.signals.update_result.emit(res)
         threading.Thread(target=worker, daemon=True).start()
 
     def on_update_result(self, res: dict):
         self._update_running = False
+        cli = res.get("cli") or {"ok": False, "error": "not checked"}
+        app_new = bool(res.get("ok") and res.get("newer"))
+        cli_new = bool(cli.get("ok") and cli.get("newer"))
         st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
         st.setValue("update/last_checked", time.strftime("%Y-%m-%dT%H:%M:%S"))
-        st.setValue("update/last_result", ("newer:" + res["version"]) if res.get("ok") and res["newer"]
+        st.setValue("update/last_result", ("newer:" + res["version"]) if app_new
                     else ("current" if res.get("ok") else "error"))
+        st.setValue("update/cli_result", ("newer:" + str(cli.get("commit") or "")) if cli_new
+                    else ("current" if cli.get("ok") else "error"))
+        # the CLI-only toast of the automatic check: once per nightly build, not at every start
+        cli_seen = str(st.value("update/cli_notified", "") or "")
+        if cli_new and (res.get("manual") or app_new):
+            st.setValue("update/cli_notified", str(cli.get("commit") or ""))
         st.sync()
-        if self._options_dlg:
-            self._options_dlg.update_lbl.setText(self.update_status_text())
+        self._refresh_options_updates()
+        if cli.get("ok"):
+            self.log_output("MoonDeck CLI check: " + (f"newer nightly {cli.get('commit')}" if cli_new
+                                                      else "bundled CLI is current"))
+        else:
+            self.log_output(f"MoonDeck CLI check failed: {cli.get('error', '')}")
         if not res.get("ok"):
             # details (cause + CA store in use) go to the log; the toast stays short
             self.log_output(f"Update check failed: {res.get('error', '')} "
@@ -4519,29 +4608,59 @@ class MainWindow(QMainWindow):
                 notify(self, t("update_failed"),
                        t("update_failed_no_ca") if res.get("no_ca") else t("update_failed_detail"),
                        kind="error")
-            return
-        self.log_output(f"Update check: latest {res['version']}, running {APP_VERSION}")
-        if res["newer"]:
-            self._pending_update = res
+            if not cli_new:
+                return
+        else:
+            self.log_output(f"Update check: latest {res['version']}, running {APP_VERSION}")
+        if cli_new and not app_new and not res.get("manual") and cli_seen == str(cli.get("commit") or ""):
+            cli_new = False                     # already announced this build
+        elif cli_new and not app_new:
+            st.setValue("update/cli_notified", str(cli.get("commit") or ""))
+            st.sync()
+        if app_new or cli_new:
+            self._pending_update = {
+                "version": res["version"] if app_new else "", "url": res.get("url", ""),
+                "cli": ("nightly " + str(cli.get("commit") or "")).strip() if cli_new else None,
+                "cli_url": cli.get("url") or backend.CLI_RELEASE_PAGE}
             if self.isVisible():
                 self._show_update_toast()
             else:
-                self.tray.showMessage("BuddyRemote", t("update_available", version=res["version"]),
-                                      QSystemTrayIcon.MessageIcon.Information, 8000)
-        elif res.get("manual"):
-            notify(self, t("update_current", version=APP_VERSION), kind="ok")
+                msg = (t("update_both_title", version=res["version"]) if app_new and cli_new else
+                       t("update_available", version=res["version"]) if app_new else t("cli_update_title"))
+                self.tray.showMessage("BuddyRemote", msg, QSystemTrayIcon.MessageIcon.Information, 8000)
+        elif res.get("manual") and res.get("ok"):
+            notify(self, t("update_current_both", version=APP_VERSION) if cli.get("ok")
+                   else t("update_current", version=APP_VERSION), kind="ok")
 
     def _show_update_toast(self):
         if not self._pending_update:
             return
-        self.update_toast.show_update(self._pending_update["version"], self._light())
+        p = self._pending_update
+        self.update_toast.show_update(p.get("version", ""), self._light(), cli=p.get("cli"))
         if self.toast.isVisible():
             self.toast.place()
 
     def _open_update_page(self):
-        url = (self._pending_update or {}).get("url") or "https://github.com/deciderino/BuddyRemote/releases/latest"
+        p = self._pending_update or {}
+        if p.get("version") or not p.get("cli"):
+            url = p.get("url") or "https://github.com/deciderino/BuddyRemote/releases/latest"
+        else:                                   # only the CLI is newer: its release page
+            url = p.get("cli_url") or backend.CLI_RELEASE_PAGE
         QDesktopServices.openUrl(QUrl(url))
         self.update_toast.hide()
+
+    def update_state(self) -> dict:
+        """For Options › Updates: running check, last check, results of both boxes."""
+        st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
+        checked = bool(st.value("update/last_checked", ""))
+        return {"checking": self._update_running, "last": self.update_status_text(),
+                "app": str(st.value("update/last_result", "") or "") if checked else "",
+                "cli": str(st.value("update/cli_result", "") or "") if checked else ""}
+
+    def _refresh_options_updates(self):
+        dlg = self._options_dlg
+        if dlg is not None and hasattr(dlg, "refresh_updates"):
+            dlg.refresh_updates(self.update_state())
 
     def update_status_text(self) -> str:
         st = QSettings(str(WINDOW_STATE_FILE), QSettings.Format.IniFormat)
@@ -4556,14 +4675,40 @@ class MainWindow(QMainWindow):
             day = t("today") + " " + time.strftime("%H:%M", tm)
         else:
             day = time.strftime(t("date_fmt"), tm)
-        res = str(st.value("update/last_result", "") or "")
-        if res.startswith("newer:"):
-            what = t("update_res_newer", version=res[6:])
-        elif res == "current":
-            what = t("update_res_current")
+        return t("upd_last_checked", when=day)
+
+    # --- custom MoonDeck CLI ------------------------------------------------------
+    def _probe_custom_cli(self):
+        """Check a configured custom CLI in the background (its --help); the result
+        arrives via the cli_state signal. Bundled only: nothing to do."""
+        if backend.custom_cli_path():
+            threading.Thread(target=backend.active_cli, daemon=True).start()
         else:
-            what = t("update_res_error")
-        return t("update_last_checked", when=day, result=what)
+            self._update_status_bar()
+
+    def on_cli_state(self, state: str, path: str, reason: str):
+        """Custom CLI changed state. failed/missing: the bundled CLI takes over, the
+        setting stays; one amber toast per change (with "Einstellungen")."""
+        if hasattr(self, "cli_lbl"):
+            self._update_status_bar()
+        dlg = self._options_dlg
+        if dlg is not None and hasattr(dlg, "_render_cli_block"):
+            dlg._render_cli_block()
+        if state in ("failed", "missing"):
+            logging.warning("custom MoonDeck CLI %s (%s): %s – using the bundled CLI", state, path, reason)
+            if self._cli_toast_for == (state, path):
+                return
+            self._cli_toast_for = (state, path)
+            title = t("cli_custom_failed") if state == "failed" else t("cli_custom_missing")
+            self.show_toast(title, t("cli_toast_detail", path=path), kind="info",
+                            action=(t("toast_settings"), self._open_options_from_toast), ms=15000)
+        elif state == "ok":
+            self._cli_toast_for = None
+
+    def _open_options_from_toast(self):
+        self.toast.hide()
+        if self._options_dlg is None:
+            self.open_options()
 
     def _update_counts(self):
         if not hasattr(self, "count_lbl"):
@@ -4578,7 +4723,18 @@ class MainWindow(QMainWindow):
             self.refresh_lbl.setText(t("auto_refresh_every", s=st.get("status_interval", 30)))
         else:
             self.refresh_lbl.setText(t("auto_refresh_off"))
-        self.cli_lbl.setText("MoonDeck CLI " + ("✓" if cli_available() else "✗"))
+        path = backend.custom_cli_path()
+        if path:        # custom CLI chosen: always visible, also while it works
+            state, reason = backend.custom_cli_state()
+            tip = t("cli_custom_status_tip", path=path)
+            if state in ("failed", "missing"):
+                tip += "\n" + (t("cli_custom_failed") if state == "failed" else t("cli_custom_missing")) \
+                    + (f" ({reason})" if reason else "")
+            self.cli_lbl.setText(t("cli_custom_status"))
+            self.cli_lbl.setToolTip(tip)
+        else:
+            self.cli_lbl.setText("MoonDeck CLI " + ("✓" if cli_available() else "✗"))
+            self.cli_lbl.setToolTip("")
         self._update_counts()
 
     def _set_log_visible(self, on: bool):

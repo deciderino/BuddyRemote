@@ -5,12 +5,12 @@ import logging
 import os
 import sys
 from pathlib import Path
-from PyQt6.QtWidgets import (QApplication, QAbstractButton, QCheckBox, QComboBox, QDialog, QFormLayout,
-                             QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
+from PyQt6.QtWidgets import (QApplication, QAbstractButton, QBoxLayout, QCheckBox, QComboBox, QDialog,
+                             QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                             QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpacerItem, QSpinBox,
                              QVBoxLayout, QWidget)
 from PyQt6.QtCore import Qt, QObject, QEvent, QUrl
-from PyQt6.QtGui import QDesktopServices, QFont
+from PyQt6.QtGui import QCursor, QDesktopServices, QFont
 from paths import APP_VERSION, APP_DIR, RES_DIR, PACKAGED
 from i18n import LANGUAGES, LANGUAGE_NAMES, language_choice, t
 from config import load_config
@@ -243,6 +243,93 @@ class LicenseDialog(QDialog):
                 self.text.setPlainText(str(e))
 
 
+def _label(text: str, col: str, px: int = 13, bold: bool = False, sel: bool = False) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet(f"color: {col}; font-size: {px}px;" + (" font-weight: bold;" if bold else ""))
+    if sel:             # paths / checksums: copy by hand
+        lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                    | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+    return lbl
+
+
+def _restyle(lbl: QLabel, col: str, px: int = 13, bold: bool = False):
+    lbl.setStyleSheet(f"color: {col}; font-size: {px}px;" + (" font-weight: bold;" if bold else ""))
+
+
+class _UpdGroup(QFrame):
+    """One box of Options › Updates (BuddyRemote / MoonDeck CLI): title + key/value rows."""
+    def __init__(self, title: str, cc: dict):
+        super().__init__()
+        self.setObjectName("updGroup")
+        self.setStyleSheet(f"QFrame#updGroup {{ border: 1px solid {cc['card_b']}; border-radius: 8px; "
+                           "background: transparent; } QFrame#updGroup QLabel { border: none; }")
+        self.cc = cc
+        self.g = QGridLayout(self)
+        self.g.setContentsMargins(12, 10, 12, 12)
+        self.g.setHorizontalSpacing(10)
+        self.g.setVerticalSpacing(6)
+        self.g.setColumnStretch(1, 1)
+        self.g.addWidget(_label(title, cc["name"], 14, bold=True), 0, 0, 1, 2)
+        self.n = 1      # side by side both boxes get the row height (rows stay at the top)
+
+    def kv(self, key: str, value: QWidget) -> QWidget:
+        if key:         # no key label for continuation rows: a hidden value hides the whole row
+            k = _label(key, self.cc["sub"])
+            k.setWordWrap(False)
+            self.g.addWidget(k, self.n, 0, Qt.AlignmentFlag.AlignTop)
+        self.g.addWidget(value, self.n, 1, Qt.AlignmentFlag.AlignTop)
+        self.n += 1
+        return value
+
+    def full(self, w: QWidget) -> QWidget:
+        self.g.addWidget(w, self.n, 0, 1, 2)
+        self.n += 1
+        return w
+
+    def done(self):
+        # spare height (the box next to it is taller) goes below the rows, not between them
+        self.g.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding), self.n, 0)
+        self.g.setRowStretch(self.n, 1)
+
+
+class _UpdBoxes(QWidget):
+    """The two update boxes side by side; stacked when the dialog is narrow."""
+    NARROW = 620
+
+    def __init__(self, a: QWidget, b: QWidget):
+        super().__init__()
+        self.lay = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setSpacing(10)
+        self.lay.addWidget(a, 1)
+        self.lay.addWidget(b, 1)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        d = (QBoxLayout.Direction.TopToBottom if ev.size().width() < self.NARROW
+             else QBoxLayout.Direction.LeftToRight)
+        if self.lay.direction() != d:
+            self.lay.setDirection(d)
+
+    def stacked(self) -> bool:
+        return self.lay.direction() == QBoxLayout.Direction.TopToBottom
+
+
+def _link_button(text: str, cc: dict) -> QPushButton:
+    b = QPushButton(text)
+    b.setFlat(True)
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    b.setStyleSheet(f"QPushButton {{ color: {cc['link']}; text-decoration: underline; background: transparent; "
+                    "border: none; text-align: left; padding: 0px; min-height: 32px; }")
+    return b
+
+
+def short_sha(digest: str) -> str:
+    return f"{digest[:8]}…{digest[-4:]}" if len(digest) >= 12 else digest
+
+
 class OptionsDialog(QDialog):
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
@@ -318,21 +405,46 @@ class OptionsDialog(QDialog):
         self.autostart.setChecked(settings.get("autostart", False))
         layout.addRow(self.autostart)
 
-        # --- Updates -------------------------------------------------------------
+        # --- Updates: two boxes (BuddyRemote / MoonDeck CLI), one check for both ------
+        self._win = parent
+        self._cc = cc
         section("sec_updates")
         self.check_updates = QCheckBox(t("check_updates"))
         self.check_updates.setChecked(settings.get("check_updates", True))
         layout.addRow(self.check_updates)
-        self.update_lbl = QLabel(parent.update_status_text() if parent and hasattr(parent, "update_status_text") else "")
-        self.update_lbl.setStyleSheet(f"color: {cc['sub']}; font-size: 13px;")
-        self.update_lbl.setWordWrap(True)
-        layout.addRow(t("updates_row"), self.update_lbl)
+        ga = _UpdGroup("BuddyRemote", cc)
+        ga.kv(t("upd_installed"), _label(APP_VERSION, cc["name"]))
+        self.upd_app_status = ga.kv(t("upd_status"), _label("", cc["sub"]))
+        self.upd_app_note = ga.kv("", _label(t("upd_nothing_auto"), cc["sub"], 12))
+        self.upd_dl_btn = QPushButton(t("update_download"))
+        self.upd_dl_btn.clicked.connect(self._open_app_release)
+        dl = QWidget()
+        h = QHBoxLayout(dl)
+        h.setContentsMargins(0, 2, 0, 0)
+        h.addWidget(self.upd_dl_btn)
+        h.addStretch(1)
+        self.upd_dl_row = ga.full(dl)
+        ga.done()
+        gc = _UpdGroup("MoonDeck CLI", cc)
+        self.upd_cli_version = gc.kv(t("upd_version"), _label("", cc["name"]))
+        self.upd_cli_path = gc.kv("", _label("", cc["sub"], 11, sel=True))
+        self.upd_cli_status = gc.kv(t("upd_status"), _label("", cc["sub"]))
+        self.upd_cli_note = gc.kv("", _label(t("upd_cli_with_app"), cc["sub"], 12))
+        self.upd_cli_link = gc.full(_link_button(t("upd_cli_manage"), cc))
+        self.upd_cli_link.clicked.connect(self._goto_cli_block)
+        gc.done()
+        self.upd_groups = (ga, gc)
+        self.upd_boxes = _UpdBoxes(ga, gc)
+        layout.addRow(self.upd_boxes)
         self.update_btn = QPushButton(t("check_updates_now"))
+        self.update_btn.setMinimumHeight(48)
         self.update_btn.clicked.connect(lambda: parent.check_for_updates(manual=True) if parent else None)
-        row = QHBoxLayout()
-        row.addWidget(self.update_btn)
-        row.addStretch(1)
-        layout.addRow(row)
+        self.update_lbl = _label("", cc["sub"])
+        brow = QHBoxLayout()
+        brow.setSpacing(12)
+        brow.addWidget(self.update_btn)
+        brow.addWidget(self.update_lbl, 1)
+        layout.addRow(brow)
 
         # --- Dateien -------------------------------------------------------------
         section("sec_files")
@@ -363,14 +475,15 @@ class OptionsDialog(QDialog):
         self.data_dir_err.hide()
         layout.addRow(self.data_dir_err)
 
+        # MoonDeck CLI: the bundled one (default) or a custom one picked here (1.3.1).
+        # Packaged: pinned CLI from the AppImage; source mode: the downloaded one, plus
+        # its checksum verify rows below.
+        self._saved_cli = str(settings.get("custom_cli", "") or "")
+        self._custom_cli = self._saved_cli
+        self._sha_cache = {}
+        self._add_cli_block(layout, cc)
         self.verify_label = None
-        if PACKAGED:
-            # The AppImage ships a pinned CLI (checksum checked at build time):
-            # no download / verify UI, just what is bundled.
-            cli_lbl = QLabel(backend.bundled_cli_text())
-            cli_lbl.setWordWrap(True)
-            layout.addRow("MoonDeck CLI:", cli_lbl)
-        else:
+        if not PACKAGED:
             self._add_cli_verify_rows(layout, settings)
 
         # --- About: only the version and the thanks to MoonDeck, licenses ----------
@@ -401,8 +514,192 @@ class OptionsDialog(QDialog):
         btns.addWidget(save)
         btns.addWidget(cancel)
         layout.addRow(btns)
+        self._render_cli_block()
+        self.refresh_updates()
         install_dialog_nav(self)
         fit_dialog_to_screen(self)
+
+    # --- MoonDeck CLI block (Dateien) ---------------------------------------------
+    def _add_cli_block(self, layout, cc):
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self.cli_title = _label("", cc["name"])
+        self.cli_path_lbl = _label("", cc["sub"], 11, sel=True)
+        self.cli_path_lbl.setObjectName("cliPath")
+        self.cli_sha_lbl = _label("", cc["sub"], 11, sel=True)
+        self.cli_note = _label(t("cli_custom_pending"), cc["sub"], 12)
+        self.cli_err = _label("", cc["err"])           # picked file rejected: said here, not as a toast
+        self.cli_err.setObjectName("cliError")
+        for w in (self.cli_title, self.cli_path_lbl, self.cli_sha_lbl, self.cli_note, self.cli_err):
+            v.addWidget(w)
+        btns = QHBoxLayout()
+        btns.setSpacing(8)
+        self.cli_choose_btn = QPushButton(t("cli_choose"))
+        self.cli_choose_btn.clicked.connect(self._choose_cli)
+        self.cli_back_btn = QPushButton(t("cli_back_bundled"))
+        self.cli_back_btn.clicked.connect(self._use_bundled_cli)
+        btns.addWidget(self.cli_back_btn)
+        btns.addWidget(self.cli_choose_btn)
+        btns.addStretch(1)
+        v.addLayout(btns)
+        self.cli_box = box
+        layout.addRow("MoonDeck CLI:", box)
+
+    def _cli_sha(self, path: str) -> str:
+        if path not in self._sha_cache:
+            try:
+                self._sha_cache[path] = backend.sha256_file(path)
+            except OSError:
+                self._sha_cache[path] = ""
+        return self._sha_cache[path]
+
+    def custom_cli_view(self) -> str:
+        """'bundled' | 'active' | 'failed' | 'missing' for the CLI shown in the dialog."""
+        path = self._custom_cli
+        if not path:
+            return "bundled"
+        if not Path(path).is_file():
+            return "missing"
+        if path == self._saved_cli and path == backend.custom_cli_path():
+            if backend.custom_cli_state()[0] in ("failed", "missing"):
+                return "failed"
+        return "active"
+
+    def _render_cli_block(self):
+        cc = self._cc
+        view = self.custom_cli_view()
+        label = backend.bundled_cli_label()
+        if view == "bundled":
+            ok = backend.CLI_BIN.is_file()
+            self.cli_title.setText(t("cli_bundled_paren", label=label) + (" ✓" if ok else " ✗"))
+            _restyle(self.cli_title, cc["name"] if ok else cc["err"])
+            self.cli_choose_btn.setText(t("cli_choose"))
+        else:
+            bad = view in ("failed", "missing")
+            col = cc["err"] if bad else cc["warn_t"]
+            title = {"failed": "cli_custom_failed", "missing": "cli_custom_missing"}.get(view, "cli_custom_active")
+            self.cli_title.setText("⚠ " + t(title))
+            _restyle(self.cli_title, col, bold=True)
+            self.cli_path_lbl.setText(self._custom_cli)
+            _restyle(self.cli_path_lbl, cc["err"] if bad else cc["sub"], 11)
+            sha = self._cli_sha(self._custom_cli) if view != "missing" else ""
+            self.cli_sha_lbl.setText(t("cli_custom_sha", sha=short_sha(sha), label=label) if sha else "")
+            self.cli_choose_btn.setText(t("cli_choose_other"))
+        custom = view != "bundled"
+        self.cli_path_lbl.setVisible(custom)
+        self.cli_sha_lbl.setVisible(custom and bool(self.cli_sha_lbl.text()))
+        self.cli_back_btn.setVisible(custom)
+        self.cli_note.setVisible(self._custom_cli != self._saved_cli)
+
+    def _pick_cli_file(self) -> str:
+        """File picker (Linux: any file; a Windows build would filter *.exe here)."""
+        start = str(Path(self._custom_cli).parent) if self._custom_cli else str(Path.home())
+        flt = "MoonDeck CLI (*.exe)" if sys.platform == "win32" else ""
+        path, _ = QFileDialog.getOpenFileName(self, t("cli_pick_title"), start, flt)
+        return path
+
+    def _choose_cli(self):
+        path = self._pick_cli_file()
+        if not path:
+            return
+        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
+        try:
+            ok, why = backend.probe_cli(path)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not ok:
+            logging.warning("custom MoonDeck CLI rejected (%s): %s", path, why)
+            self.cli_err.setText("⚠ " + t("cli_custom_rejected", reason=why))
+            self.cli_err.show()
+            return
+        self.cli_err.hide()
+        self._sha_cache.pop(path, None)
+        self._custom_cli = path
+        self._render_cli_block()
+        self.refresh_updates()
+
+    def _use_bundled_cli(self):
+        self.cli_err.hide()
+        self._custom_cli = ""
+        self._render_cli_block()
+        self.refresh_updates()
+        self.cli_choose_btn.setFocus()
+
+    def _goto_cli_block(self):
+        w = self.cli_box.parentWidget()
+        while w is not None and not isinstance(w, QScrollArea):
+            w = w.parentWidget()
+        if w is not None:
+            w.ensureWidgetVisible(self.cli_box)
+        (self.cli_back_btn if self.cli_back_btn.isVisible() else self.cli_choose_btn).setFocus()
+
+    # --- Updates boxes ----------------------------------------------------------
+    def _open_app_release(self):
+        if self._win is not None and hasattr(self._win, "_open_update_page"):
+            self._win._open_update_page()
+
+    def refresh_updates(self, state: dict | None = None):
+        """state from MainWindow.update_state(): checking, last (text), app, cli, cli_commit."""
+        if state is None:
+            win = self._win
+            state = win.update_state() if win is not None and hasattr(win, "update_state") else {}
+        cc = self._cc
+        ok_col = cc.get("steam_t", cc["name"])
+        checking = bool(state.get("checking"))
+        app_res = str(state.get("app", "") or "")
+        cli_res = str(state.get("cli", "") or "")
+
+        def status(lbl, res, newer_text):
+            if checking:
+                lbl.setText(t("update_checking"))
+                _restyle(lbl, cc["sub"])
+            elif res.startswith("newer"):
+                lbl.setText("ℹ " + newer_text)
+                _restyle(lbl, cc["warn_t"], bold=True)
+            elif res == "current":
+                lbl.setText(t("upd_current"))
+                _restyle(lbl, ok_col)
+            elif res == "error":
+                lbl.setText(t("update_res_error"))
+                _restyle(lbl, cc["err"])
+            else:
+                lbl.setText(t("upd_never"))
+                _restyle(lbl, cc["sub"])
+        app_new = app_res.startswith("newer:") and not checking
+        status(self.upd_app_status, app_res, t("update_available", version=app_res[6:]))
+        self.upd_app_note.setVisible(app_new)
+        self.upd_dl_row.setVisible(app_new)
+        label = backend.bundled_cli_label()
+        commit = cli_res[6:] if cli_res.startswith("newer:") else ""
+        newer_label = ("nightly " + commit) if commit else "nightly"
+        custom = bool(self._custom_cli)
+        if custom:
+            self.upd_cli_version.setText("⚠ " + t("cli_custom_active"))
+            _restyle(self.upd_cli_version, cc["warn_t"], bold=True)
+            self.upd_cli_path.setText(self._custom_cli)
+            if checking:
+                result = t("update_checking")
+            elif cli_res.startswith("newer"):
+                result = "ℹ " + t("upd_cli_newer", label=newer_label)
+            elif cli_res == "current":
+                result = t("upd_current")
+            elif cli_res == "error":
+                result = t("update_res_error")
+            else:
+                result = t("upd_never")
+            self.upd_cli_status.setText(t("upd_cli_custom", label=label, result=result))
+            _restyle(self.upd_cli_status, cc["sub"], 12)
+        else:
+            self.upd_cli_version.setText(t("upd_cli_version", label=label))
+            _restyle(self.upd_cli_version, cc["name"])
+            status(self.upd_cli_status, cli_res, t("upd_cli_newer", label=newer_label))
+        self.upd_cli_path.setVisible(custom)
+        self.upd_cli_link.setVisible(custom)
+        self.upd_cli_note.setVisible(not custom and cli_res.startswith("newer") and not checking)
+        self.update_btn.setEnabled(not checking)
+        self.update_lbl.setText(t("update_checking") if checking else str(state.get("last", "") or t("update_never")))
 
     def _open_data_dir(self) -> bool:
         """Opens the data folder in the system file manager (platform neutral)."""
@@ -472,6 +769,7 @@ class OptionsDialog(QDialog):
             "theme": self.theme.currentData() or "Dark",
             "language": self.language.currentData(),
             "language_set": True,
+            "custom_cli": self._custom_cli,
         }
 
 
