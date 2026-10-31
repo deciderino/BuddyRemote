@@ -5,9 +5,18 @@ All notable changes to BuddyRemote are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 release.
 
-## [Unreleased] - 1.3.1 (draft)
+## [Unreleased]
 
-A maintenance release with two small additions; no changes to pairing, wake or shut down.
+## [1.3.1] - 2026-10-31
+
+### Highlights
+
+- **Bring your own MoonDeck CLI.** BuddyRemote still ships with its own CLI, but you can now pick a different one in Settings → Files. If it ever fails, BuddyRemote quietly falls back to the bundled one and tells you.
+- **Updates at a glance.** Settings → Updates shows BuddyRemote and the MoonDeck CLI side by side, with one "Check now" button. A newer CLI is only announced, never downloaded.
+- **Clear hint when Buddy doesn't match.** If MoonDeck Buddy on the host speaks a different version, the card turns orange and tells you which side to update. Only Start Steam is paused; wake and shut down keep working.
+- **Leaner AppImage.** The CLI now runs straight from the AppImage instead of being copied to your settings folder.
+- **Your setup is kept.** Just replace the AppImage; nothing changes for pairing, wake or shut down.
+
 
 ### Added
 
@@ -191,7 +200,8 @@ A maintenance release with two small additions; no changes to pairing, wake or s
 
 - First release: a Linux GUI for MoonDeck Buddy with wake, shut down, restart and suspend, pairing with automatic MAC detection, multiple hosts, a tray icon, an automatic MoonDeck CLI download with checksum verification, and optional logging.
 
-[Unreleased]: https://github.com/deciderino/BuddyRemote/compare/1.3...HEAD
+[Unreleased]: https://github.com/deciderino/BuddyRemote/compare/1.3.1...HEAD
+[1.3.1]: https://github.com/deciderino/BuddyRemote/compare/1.3...1.3.1
 [1.3]: https://github.com/deciderino/BuddyRemote/compare/1.2...1.3
 [1.2]: https://github.com/deciderino/BuddyRemote/compare/1.0...1.2
 [1.0]: https://github.com/deciderino/BuddyRemote/releases/tag/1.0
