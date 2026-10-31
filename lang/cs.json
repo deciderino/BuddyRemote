@@ -293,6 +293,7 @@
   "st_mismatch_unknown": "PC online · Buddy dostupný · verze nesouhlasí",
   "st_api_bad": "✗ Verze Buddy: API {host} – BuddyRemote očekává API {want}",
   "st_api_bad_unknown": "✗ Verze Buddy: MoonDeck CLI hlásí „needs update“ – BuddyRemote očekává API {want}",
+  "st_api_bad_custom": "✗ Verze Buddy: vlastní MoonDeck CLI hlásí „needs update“",
   "st_api_fix_old": "Aktualizujte Buddy na hostiteli (MoonDeck Buddy, nejnovější verze).",
   "st_api_fix_new": "Buddy na hostiteli je novější: aktualizujte BuddyRemote (je potřeba nová MoonDeck CLI).",
   "st_api_fix_unknown": "Aktualizujte MoonDeck Buddy na hostiteli i BuddyRemote.",

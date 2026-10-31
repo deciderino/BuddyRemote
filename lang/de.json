@@ -293,6 +293,7 @@
   "st_mismatch_unknown": "PC online · Buddy erreichbar · Version passt nicht",
   "st_api_bad": "✗ Buddy-Version: API {host} – BuddyRemote erwartet API {want}",
   "st_api_bad_unknown": "✗ Buddy-Version: MoonDeck CLI meldet „needs update“ – BuddyRemote erwartet API {want}",
+  "st_api_bad_custom": "✗ Buddy-Version: die eigene MoonDeck CLI meldet „needs update“",
   "st_api_fix_old": "Buddy auf dem Host aktualisieren (MoonDeck Buddy, neueste Version).",
   "st_api_fix_new": "Buddy auf dem Host ist neuer: BuddyRemote aktualisieren (neue MoonDeck CLI nötig).",
   "st_api_fix_unknown": "MoonDeck Buddy auf dem Host und BuddyRemote auf den neuesten Stand bringen.",

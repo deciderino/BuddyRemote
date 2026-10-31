@@ -293,6 +293,7 @@
   "st_mismatch_unknown": "PC オンライン · Buddy 到達可能 · バージョン不一致",
   "st_api_bad": "✗ Buddy のバージョン: API {host} – BuddyRemote は API {want} が必要",
   "st_api_bad_unknown": "✗ Buddy のバージョン: MoonDeck CLI が「needs update」を報告 – BuddyRemote は API {want} が必要",
+  "st_api_bad_custom": "✗ Buddy のバージョン: カスタム MoonDeck CLI が「needs update」を報告",
   "st_api_fix_old": "ホストの Buddy を更新してください (MoonDeck Buddy の最新版)。",
   "st_api_fix_new": "ホストの Buddy の方が新しいです: BuddyRemote を更新してください (新しい MoonDeck CLI が必要)。",
   "st_api_fix_unknown": "ホストの MoonDeck Buddy と BuddyRemote を最新にしてください。",

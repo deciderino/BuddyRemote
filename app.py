@@ -661,7 +661,8 @@ class HostRow(QFrame):
             lines.append(t("st_buddy_ok", port=port) if buddy else t("st_buddy_fail", port=port))
             if mm:
                 lines.append(t("st_api_bad", host=mm["host"], want=mm["want"]) if mm.get("host") is not None
-                             else t("st_api_bad_unknown", want=mm["want"]))
+                             else t("st_api_bad_unknown", want=mm["want"]) if mm.get("want")
+                             else t("st_api_bad_custom"))
                 lines.append(self.mismatch_text(mm, "fix"))
             steam = r.get("steam") if buddy else None
             if steam and steam.get("running"):
@@ -4362,9 +4363,12 @@ class MainWindow(QMainWindow):
             tp.start()
             ok, body = check_buddy_api(h.get("ip", ""), h.get("buddy_port", 59999), timeout=2.0)
             res["buddy"] = ok
-            # 1.3.1: Buddy API vs. the one the bundled CLI speaks (only a warning)
+            # 1.3.1: Buddy API vs. the one the bundled CLI speaks (only a warning).
+            # A custom CLI may speak another API (unknown to us): then only its own
+            # "needs update" output below counts.
             res["api"] = backend.parse_api_version(body) if ok else None
-            mm = backend.api_mismatch(res["api"]) if ok else None
+            custom = ok and backend.active_cli() != backend.CLI_BIN
+            mm = backend.api_mismatch(res["api"]) if ok and not custom else None
             tp.join(8)
             res["ping"] = bool(box.get("ping"))
             if res["buddy"] and not mm:
@@ -4376,6 +4380,8 @@ class MainWindow(QMainWindow):
                 mm = backend.api_mismatch(None, f"{out or ''}\n{err or ''}")
                 if mm:
                     res["steam"] = None
+                    if custom:
+                        mm["want"] = None       # the custom CLI's API is unknown to us
             res["api_mismatch"] = mm
         except Exception:
             logging.exception("status check %s", h.get("name"))

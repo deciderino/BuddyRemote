@@ -293,6 +293,7 @@
   "st_mismatch_unknown": "PC 온라인 · Buddy 연결됨 · 버전 불일치",
   "st_api_bad": "✗ Buddy 버전: API {host} – BuddyRemote는 API {want} 필요",
   "st_api_bad_unknown": "✗ Buddy 버전: MoonDeck CLI가 “needs update” 보고 – BuddyRemote는 API {want} 필요",
+  "st_api_bad_custom": "✗ Buddy 버전: 사용자 지정 MoonDeck CLI가 “needs update” 보고",
   "st_api_fix_old": "호스트의 Buddy를 업데이트하세요 (MoonDeck Buddy 최신 버전).",
   "st_api_fix_new": "호스트의 Buddy가 더 최신입니다: BuddyRemote를 업데이트하세요 (새 MoonDeck CLI 필요).",
   "st_api_fix_unknown": "호스트의 MoonDeck Buddy와 BuddyRemote를 최신으로 업데이트하세요.",
