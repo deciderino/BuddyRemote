@@ -422,24 +422,6 @@ def set_visible(tiles, idx, on: bool):
     return tiles, "moved"
 
 
-def pack_rows(tiles):
-    """Remove completely empty rows. Not used when saving any more: empty rows and
-    cells are part of the layout the user arranged and are saved exactly."""
-    tiles = copy_tiles(tiles)
-    used_rows = {r for (_, r) in occupied(tiles)}
-    if not used_rows:
-        return tiles
-    remap, n = {}, 0
-    for r in range(max(used_rows) + 1):
-        if r in used_rows:
-            remap[r] = n
-            n += 1
-    for a in tiles:
-        if is_active(a):
-            a["pos"] = [a["pos"][0], remap[a["pos"][1]]]
-    return tiles
-
-
 def rows_used(tiles) -> int:
     used = occupied(tiles)
     return max((r for _, r in used), default=-1) + 1

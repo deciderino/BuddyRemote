@@ -1104,20 +1104,17 @@ class HostRow(QFrame):
         # never widens the card; ends in "…" in narrow windows / long languages
         self.time_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         top.addWidget(self.time_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
-        self.mgmt_buttons = []
-        # ↑ ↓ are gone: cards are reordered by drag and drop in edit mode (Ctrl+Up/Down)
-        for text, tip, slot in [("⚙", "tip_conn", lambda: self.app.edit_host(self.host))]:
-            b = QPushButton(text)
-            b.setProperty("touchRole", "icon")
-            b.setProperty("mgmt", True)
-            b.setFixedSize(self.ICON, self.ICON)
-            b.setToolTip(t(tip))
-            b.setProperty("navKey", tip)
-            b.clicked.connect(slot)
-            b.installEventFilter(self.app)
-            top.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
-            self.mgmt_buttons.append(b)
-        self.conn_btn = self.mgmt_buttons[0]
+        # the only card button: connection settings (cards are reordered by drag and
+        # drop in edit mode, Ctrl+Up/Down)
+        b = self.conn_btn = QPushButton("⚙")
+        b.setProperty("touchRole", "icon")
+        b.setProperty("mgmt", True)
+        b.setFixedSize(self.ICON, self.ICON)
+        b.setToolTip(t("tip_conn"))
+        b.setProperty("navKey", "tip_conn")
+        b.clicked.connect(lambda: self.app.edit_host(self.host))
+        b.installEventFilter(self.app)
+        top.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addLayout(top)
         indent = self.dot.width() + top.spacing()
         if self.grip_lbl is not None:
@@ -1194,13 +1191,13 @@ class HostRow(QFrame):
                 root.addWidget(self.empty_lbl)
 
         if self.editing:
-            self.nav_rows = [self.mgmt_buttons, [self.details_btn], [self.editor], self.hidden_btns]
-            self.nav_buttons = [self.editor] + self.hidden_btns + [self.details_btn] + self.mgmt_buttons
+            self.nav_rows = [[self.conn_btn], [self.details_btn], [self.editor], self.hidden_btns]
+            self.nav_buttons = [self.editor] + self.hidden_btns + [self.details_btn, self.conn_btn]
         else:
-            self.nav_rows = ([self.mgmt_buttons, [self.details_btn]]
+            self.nav_rows = ([[self.conn_btn], [self.details_btn]]
                              + [[w for _, w in sorted(by_row[r], key=lambda x: x[0])] for r in sorted(by_row)])
             self.nav_buttons = ([b for row in self.nav_rows[2:] for b in row]
-                                + [self.details_btn] + self.mgmt_buttons)
+                                + [self.details_btn, self.conn_btn])
         if lp:
             for w in (self, self.dot, self.name_lbl):
                 lp.watch(w)
@@ -1279,7 +1276,7 @@ class HostRow(QFrame):
                 self.hidden_btns.append(b)
         self.hidden_box.setVisible(show)
         self.nav_rows[3:] = [self.hidden_btns]
-        self.nav_buttons[:] = [self.editor] + self.hidden_btns + [self.details_btn] + self.mgmt_buttons
+        self.nav_buttons[:] = [self.editor] + self.hidden_btns + [self.details_btn, self.conn_btn]
         self._lock_widths()
 
     def _edit_col_need(self) -> int:
@@ -1398,7 +1395,7 @@ class HostRow(QFrame):
 
     def _line1_width(self) -> int:
         t1 = self._top
-        icons = len(self.mgmt_buttons) * self.ICON + (len(self.mgmt_buttons) - 1) * t1.spacing()
+        icons = self.ICON
         steam = (self.steam_lbl.sizeHint().width() + t1.spacing()) if not self.steam_lbl.isHidden() else 0
         ip = (self.ip_lbl.sizeHint().width() + t1.spacing()) if self._show_ip() else 0
         grip = (self.grip_lbl.width() + t1.spacing()) if self.grip_lbl is not None else 0
@@ -1413,14 +1410,9 @@ class HostRow(QFrame):
         grid_w = g.left() + g.right() + tiles.COLS * self.grid.columnMinimumWidth(0) + (tiles.COLS - 1) * self.SPACING
         return m.left() + m.right() + max(self._line1_width(), grid_w)
 
-    compact_width = wide_width
-
-    def compact_height(self) -> int:
+    def min_card_height(self) -> int:
         self._lock_widths()
         return self.minimumSizeHint().height()
-
-    def set_compact(self, on: bool):
-        """1.2 had a two-line layout for narrow windows; the grid needs none."""
 
     # --- theme / state -------------------------------------------------------------
     def _light(self) -> bool:
@@ -6326,8 +6318,7 @@ class MainWindow(QMainWindow):
     CARD_MAX_EXTRA = 200
 
     def _relayout_rows(self):
-        """UI only: pick one-line or two-line cards from the visible width and
-        center the cards when the window is very wide."""
+        """UI only: center the cards when the window is very wide."""
         rows = list(self.host_rows.values())
         if not rows:
             self.host_layout.setContentsMargins(0, 0, 0, 0)
@@ -6339,22 +6330,19 @@ class MainWindow(QMainWindow):
         m = self.host_layout.contentsMargins()
         if m.left() != side:
             self.host_layout.setContentsMargins(side, 0, side, 0)
-        compact = vw - 2 * side < need
-        for r in rows:
-            r.set_compact(compact)
 
     def _fit_min_size(self):
         """UI only: minimum size computed from the real layout (scales with font
-        size and display scaling): the narrowest card with all buttons visible
-        (two-line card), toolbar and status bar; height keeps one card visible."""
+        size and display scaling): the narrowest card with every tile text readable,
+        toolbar and status bar; height keeps one card visible."""
         avail = self._available()
         rows = list(self.host_rows.values())
         bm = self._body_layout.contentsMargins()
         chrome_w = bm.left() + bm.right() + 2 * self.scroll.frameWidth() + self.scroll.verticalScrollBar().sizeHint().width()
-        card_w = max([r.compact_width() for r in rows] + [0])
+        card_w = max([r.wide_width() for r in rows] + [0])
         perm = sum(l.sizeHint().width() for l in (self.count_lbl, self.refresh_lbl, self.cli_lbl)) + 60
         w = max(card_w + chrome_w, self.toolbar.minimumSizeHint().width(), perm, 420)
-        card_h = max([r.compact_height() for r in rows] + [80])
+        card_h = max([r.min_card_height() for r in rows] + [80])
         h = ((self.tb_grip.sizeHint().height() if self._tb_collapsed else self.toolbar.sizeHint().height())
              + (self.edit_bar.heightForWidth(w) if self._edit_mode and self.edit_bar.hasHeightForWidth()
                 else self.edit_bar.sizeHint().height() if self._edit_mode else 0)

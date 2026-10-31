@@ -217,13 +217,13 @@ class EditModeTests(UiTestCase):
             return 0
         dlg_cls.exec = fake_exec
         try:
-            self.w.host_rows["h0"].mgmt_buttons[0].click()
+            self.w.host_rows["h0"].conn_btn.click()
             pump()
         finally:
             dlg_cls.exec = orig_exec
         self.assertEqual(seen.get("title"), app.t("conn_title"))
         self.assertIsNone(seen.get("tpl"), "no tile editing in the connection dialog")
-        self.assertEqual([b.text() for b in self.w.host_rows["h0"].mgmt_buttons], ["⚙"], "↑ ↓ are gone (cards are dragged in edit mode)")
+        self.assertEqual(card_buttons(self.w.host_rows["h0"]), ["⚙"], "↑ ↓ are gone (cards are dragged in edit mode)")
 
 
 class CalmStatusTests(UiTestCase):
@@ -302,6 +302,11 @@ def saved():
         return json.load(fh)
 
 
+def card_buttons(row):
+    """Texts of the card's own management buttons (only ⚙ since 1.3)."""
+    return [b.text() for b in row.findChildren(app.QPushButton) if b.property("mgmt")]
+
+
 def ini(key):
     from PyQt6.QtCore import QSettings
     return QSettings(os.path.join(TMP, "window.ini"), QSettings.Format.IniFormat).value(key)
@@ -335,7 +340,7 @@ class CardReorderTests(UiTestCase):
 
     def test_arrows_gone_only_gear(self):
         for r in self.w.host_rows.values():
-            self.assertEqual([b.text() for b in r.mgmt_buttons], ["⚙"])
+            self.assertEqual(card_buttons(r), ["⚙"])
 
     def test_drag_card_in_edit_mode(self):
         from PyQt6.QtCore import QPoint

@@ -12,6 +12,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import tiles  # noqa: E402
 
 
+def pack_rows(ts):
+    """Test helper (the app keeps empty rows): remove completely empty rows."""
+    ts = tiles.copy_tiles(ts)
+    used = sorted({r for (_, r) in tiles.occupied(ts)})
+    remap = {r: n for n, r in enumerate(used)}
+    for a in ts:
+        if tiles.is_active(a):
+            a["pos"] = [a["pos"][0], remap[a["pos"][1]]]
+    return ts
+
+
 def no_overlap(ts):
     seen = set()
     for a in ts:
@@ -190,17 +201,6 @@ class Visibility(unittest.TestCase):
         out, res = tiles.set_visible(ts, i, True)
         self.assertEqual(res, "moved")
         self.assertEqual(out[i]["pos"], [0, 2])
-
-    def test_pack_rows(self):
-        ts = old("server")
-        ts, _ = tiles.move(ts, idx(ts, "online_status"), 0, 0)
-        for typ in ("boot", "neustart", "shutdown"):
-            ts, _ = tiles.move(ts, idx(ts, typ), 0, 1)
-            ts, _ = tiles.move(ts, idx(ts, typ), 0, 1)     # now at row 3, rows 1-2 empty
-        packed = tiles.pack_rows(ts)
-        self.assertEqual(tiles.rows_used(packed), 2)
-        self.assertEqual(packed[idx(packed, "boot")]["pos"], [0, 1])
-        self.assertTrue(no_overlap(packed))
 
 
 class Migration(unittest.TestCase):
@@ -390,7 +390,7 @@ class ReflowTests(unittest.TestCase):
                     # same set of visible tiles / sizes
                     self.assertEqual([(a["typ"], a["groesse"], a["sichtbar"]) for a in new],
                                      [(a["typ"], a["groesse"], a["sichtbar"]) for a in ts])
-                    ts = tiles.pack_rows(new)
+                    ts = pack_rows(new)
 
 
 class DuplicateRemoveTests(unittest.TestCase):
