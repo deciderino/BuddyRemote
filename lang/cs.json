@@ -181,7 +181,7 @@
   "pairing_waiting": "Čekám na potvrzení…",
   "edit_mode": "Upravit",
   "tip_edit_mode": "Upravit (Ctrl+E)",
-  "edit_hint": "Vše s ⠿ lze přesunout · klepnutím upravíte",
+  "edit_hint": "Podržením a tažením přesunete vše s ⠿ · klepnutím upravíte",
   "edit_done": "Hotovo",
   "tip_edit_done": "Ukončit úpravy (Esc). Všechny změny jsou už uložené.",
   "edit_size": "Velikost",

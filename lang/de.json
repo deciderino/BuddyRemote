@@ -181,7 +181,7 @@
   "pairing_waiting": "Warte auf Bestätigung …",
   "edit_mode": "Bearbeiten",
   "tip_edit_mode": "Bearbeiten (Strg+E)",
-  "edit_hint": "Alles mit ⠿ lässt sich verschieben · antippen zum Bearbeiten",
+  "edit_hint": "Gedrückt halten und ziehen verschiebt alles mit ⠿ · antippen zum Bearbeiten",
   "edit_done": "Fertig",
   "tip_edit_done": "Bearbeiten beenden (Esc). Alle Änderungen sind schon gespeichert.",
   "edit_size": "Größe",

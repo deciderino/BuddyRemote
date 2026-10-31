@@ -181,7 +181,7 @@
   "pairing_waiting": "確認を待っています…",
   "edit_mode": "編集",
   "tip_edit_mode": "編集（Ctrl+E）",
-  "edit_hint": "⠿ の付いた項目は移動できます · タップで編集",
+  "edit_hint": "⠿ の付いた項目は長押ししてドラッグで移動 · タップで編集",
   "edit_done": "完了",
   "tip_edit_done": "編集を終了 (Esc)。変更はすべて保存済みです。",
   "edit_size": "サイズ",

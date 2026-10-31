@@ -181,7 +181,7 @@
   "pairing_waiting": "In attesa di conferma…",
   "edit_mode": "Modifica",
   "tip_edit_mode": "Modifica (Ctrl+E)",
-  "edit_hint": "Tutto ciò che ha ⠿ si può spostare · tocca per modificare",
+  "edit_hint": "Tieni premuto e trascina per spostare tutto ciò che ha ⠿ · tocca per modificare",
   "edit_done": "Fatto",
   "tip_edit_done": "Termina la modifica (Esc). Tutte le modifiche sono già salvate.",
   "edit_size": "Dimensione",

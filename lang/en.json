@@ -181,7 +181,7 @@
   "pairing_waiting": "Waiting for confirmation…",
   "edit_mode": "Edit",
   "tip_edit_mode": "Edit (Ctrl+E)",
-  "edit_hint": "Anything with ⠿ can be moved · tap to edit",
+  "edit_hint": "Press and hold, then drag to move anything with ⠿ · tap to edit",
   "edit_done": "Done",
   "tip_edit_done": "Finish editing (Esc). All changes are already saved.",
   "edit_size": "Size",

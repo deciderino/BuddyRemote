@@ -1266,7 +1266,10 @@ class TilePreview(QWidget):
     ANIM_MS = 160
     OVERSHOOT = 1.25            # OutBack: short, slightly springy, not sluggish
     HOLD_MS = 350               # touch: press-and-hold to pick a tile up
-    TOUCH_SLOP = 12             # px a finger may wobble before the hold is cancelled
+    # px a finger may wobble during the hold before it counts as a swipe (hold cancelled).
+    # 32 logical px = ~3.8 mm on the Steam Deck's 7" 1280x800 screen (~216 ppi) and ~8.5 mm
+    # on a 96 dpi monitor; 12 px (~1.4 mm) was below normal fingertip jitter, the hold broke off.
+    TOUCH_SLOP = 32
 
     dropped = pyqtSignal(list, str, str)     # new tiles, dragged key, "ok" | "reflow"
     rejected = pyqtSignal(str)               # dragged key (drop not allowed, went back)
