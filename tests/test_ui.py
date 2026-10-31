@@ -5,6 +5,7 @@ Runs offscreen on a copy of the app in a temporary directory (config.json lives 
 to app.py), with the CLI, ping and Buddy calls stubbed out. Skipped without PyQt6.
     QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_ui -v
 """
+import glob
 import importlib.util
 import json
 import os
@@ -31,6 +32,34 @@ app = qa = TMP = None
 OLD_HOME = os.environ.get("HOME")
 
 
+# app.py was split into modules (1.3.1); each load must import them from the copy, fresh.
+SPLIT_MODULES = ("paths", "i18n", "config", "backend", "platform_util", "theme", "gamepad", "dialogs")
+
+
+def purge_split_modules():
+    for m in SPLIT_MODULES:
+        sys.modules.pop(m, None)
+
+
+class AppView:
+    """app.py plus the modules split out of it: reads look in app first, then in the split
+    modules; writes (stubs) go to app and to every split module that has the name."""
+    def __init__(self, mod):
+        object.__setattr__(self, "_mods", [mod] + [sys.modules[m] for m in SPLIT_MODULES
+                                                   if m in sys.modules])
+
+    def __getattr__(self, name):
+        for m in self._mods:
+            if hasattr(m, name):
+                return getattr(m, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        for i, m in enumerate(self._mods):
+            if i == 0 or hasattr(m, name):
+                setattr(m, name, value)
+
+
 def _config():
     names = ["Gaming-PC", "Workstation", "HTPC"]
     hosts = [{"id": f"h{i}", "name": names[i], "ip": f"192.0.2.{10 + i}",
@@ -49,8 +78,8 @@ def setUpModule():
     if not HAVE_QT:
         return
     TMP = tempfile.mkdtemp(prefix="br-ui-")
-    for f in ("app.py", "tiles.py", "cacerts.py"):
-        shutil.copy(os.path.join(ROOT, f), TMP)
+    for f in glob.glob(os.path.join(ROOT, "*.py")):
+        shutil.copy(f, TMP)
     shutil.copytree(os.path.join(ROOT, "lang"), os.path.join(TMP, "lang"))
     os.makedirs(os.path.join(TMP, "cli"))
     open(os.path.join(TMP, ".attributed"), "w").close()
@@ -58,8 +87,14 @@ def setUpModule():
         json.dump(_config(), fh)
     os.environ["HOME"] = os.path.join(TMP, "home")
     spec = importlib.util.spec_from_file_location("br_app_ui", os.path.join(TMP, "app.py"))
-    app = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(app)
+    mod = importlib.util.module_from_spec(spec)
+    purge_split_modules()
+    sys.path.insert(0, TMP)
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path.remove(TMP)
+    app = AppView(mod)
     app.run_cli = lambda *a, **k: (0, "", "")
     app.ping_icmp = lambda *a, **k: False
     app.check_buddy_api = lambda *a, **k: (False, "x")

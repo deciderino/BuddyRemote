@@ -24,8 +24,37 @@ echo '{"ok": true}'
 """
 
 
+# app.py was split into modules (1.3.1); each load must import them from the copy, fresh.
+SPLIT_MODULES = ("paths", "i18n", "config", "backend", "platform_util", "theme", "gamepad", "dialogs")
+
+
+def purge_split_modules():
+    for m in SPLIT_MODULES:
+        sys.modules.pop(m, None)
+
+
+class AppView:
+    """app.py plus the modules split out of it: reads look in app first, then in the split
+    modules; writes (stubs) go to app and to every split module that has the name."""
+    def __init__(self, mod):
+        object.__setattr__(self, "_mods", [mod] + [sys.modules[m] for m in SPLIT_MODULES
+                                                   if m in sys.modules])
+
+    def __getattr__(self, name):
+        for m in self._mods:
+            if hasattr(m, name):
+                return getattr(m, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        for i, m in enumerate(self._mods):
+            if i == 0 or hasattr(m, name):
+                setattr(m, name, value)
+
+
 def load_app(name, src_dir, packaged_env=None, meipass=None):
-    """Import a copy of app.py; packaged_env/meipass simulate the AppImage."""
+    """Import a copy of app.py (and its split modules, from the same copy);
+    packaged_env/meipass simulate the AppImage."""
     saved_env = dict(os.environ)
     had = hasattr(sys, "_MEIPASS")
     old_mei = getattr(sys, "_MEIPASS", None)
@@ -36,8 +65,14 @@ def load_app(name, src_dir, packaged_env=None, meipass=None):
             sys._MEIPASS = str(meipass)
         spec = importlib.util.spec_from_file_location(name, src_dir / "app.py")
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
+        purge_split_modules()
+        sys.path.insert(0, str(src_dir))
+        try:
+            spec.loader.exec_module(mod)
+            return AppView(mod)
+        finally:
+            sys.path.remove(str(src_dir))
+            purge_split_modules()
     finally:
         os.environ.clear()
         os.environ.update(saved_env)
@@ -53,8 +88,8 @@ class CliResolutionTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="br-cli-"))
         self.src = self.tmp / "src"
         self.src.mkdir()
-        for f in ("app.py", "tiles.py", "cacerts.py"):
-            shutil.copy(ROOT / f, self.src / f)
+        for f in ROOT.glob("*.py"):
+            shutil.copy(f, self.src / f.name)
         shutil.copytree(ROOT / "lang", self.src / "lang")
         self.bundle = self.tmp / "bundle"                  # fake _MEIPASS
         (self.bundle / "bundled").mkdir(parents=True)

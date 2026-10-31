@@ -40,30 +40,18 @@ from PyQt6.QtWidgets import (
 
 import tiles    # host tiles: data model, templates, grid/collision logic (no Qt)
 import cacerts  # system CA store lookup for HTTPS to GitHub (no Qt, nothing bundled)
-from PyQt6.QtCore import (Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile, QUrl, QTranslator, QLibraryInfo,
+from PyQt6.QtCore import (Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile, QUrl,
                           QRectF, QPointF, QPoint, QRect, QSize, QVariantAnimation, QEasingCurve,
                           QPropertyAnimation)
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtGui import QIcon, QActionGroup, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices, QFont, QInputDevice, QContextMenuEvent, QPainterPath
 
-APP_VERSION = "1.3.1"
-
-# ---------------------------------------------------------------------------
-APP_DIR = Path(__file__).resolve().parent
-# Packaging: read-only resources (lang/, default config, bundled CLI) live next to
-# the code / inside the bundle; writable files go to a user dir when packaged.
-RES_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
-PACKAGED = bool(getattr(sys, "frozen", False) or os.environ.get("APPIMAGE"))
-if PACKAGED:
-    APP_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "BuddyRemote"
-CONFIG_FILE = APP_DIR / "config.json"
-SEED_CONFIG = RES_DIR / "packaging" / "default-config.json"   # first-start defaults
-CLI_DIR = APP_DIR / "cli"          # source mode: download_cli() puts the CLI here
-BUNDLED_DIR = RES_DIR / "bundled"  # packaged: CLI + version file from build-appimage.sh
-LANG_DIR = RES_DIR / "lang"
-INSTANCE_LOCK = APP_DIR / ".instance.lock"
-LOG_FILE = APP_DIR / "buddyremote.log"
-WINDOW_STATE_FILE = APP_DIR / "window.ini"  # UI only: size/maximized/position
+# split from app.py (1.3.1): version + paths, UI languages
+from paths import (APP_VERSION, APP_DIR, RES_DIR, PACKAGED, CONFIG_FILE, SEED_CONFIG, CLI_DIR,
+                   BUNDLED_DIR, INSTANCE_LOCK, LOG_FILE, WINDOW_STATE_FILE,
+                   CLI_BIN, prepare_packaged_dir)
+from i18n import (LANGUAGES, LANGUAGE_NAMES, language_choice, resolve_language,
+                  set_language, install_qt_translations, t)
 
 # ---------------------------------------------------------------------------
 def seed_config():
@@ -72,19 +60,6 @@ def seed_config():
     if not CONFIG_FILE.exists() and SEED_CONFIG.is_file():
         shutil.copyfile(SEED_CONFIG, CONFIG_FILE)
 
-def cli_path(packaged: bool = PACKAGED) -> Path:
-    """The MoonDeck CLI that run_cli starts. Packaged: straight from the bundle (no
-    copy; a cli/ copy left by 1.3 in the user dir is no longer used). Source mode:
-    the one download_cli() fetched into APP_DIR/cli."""
-    return BUNDLED_DIR / "moondeck-cli" if packaged else CLI_DIR / "moondeck-cli"
-
-CLI_BIN = cli_path()
-
-def prepare_packaged_dir():
-    """Packaging only: create the user dir (config, log, lock live there)."""
-    if not PACKAGED:
-        return
-    APP_DIR.mkdir(parents=True, exist_ok=True)
 
 def bundled_cli_info() -> dict | None:
     """Packaged mode: {'version', 'commit', 'sha256'} written by build-appimage.sh."""
@@ -109,67 +84,6 @@ def setup_logging(enabled: bool):
     logging.basicConfig(level=logging.DEBUG if enabled else logging.WARNING,
                         format="%(asctime)s [%(levelname)s] %(message)s",
                         handlers=handlers, force=True)
-
-def load_lang(code="en") -> dict:
-    path = LANG_DIR / f"{code}.json"
-    if not path.exists():
-        path = LANG_DIR / "en.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-LANGUAGES = ("de", "en", "es", "fr", "it", "cs", "ja", "ko")
-# shown in Settings in their own language (never translated)
-LANGUAGE_NAMES = {"de": "Deutsch", "en": "English", "es": "Español", "fr": "Français",
-                  "it": "Italiano", "cs": "Čeština", "ja": "日本語", "ko": "한국어"}
-
-def system_language() -> str:
-    """The system locale's language if BuddyRemote has it, otherwise 'en'."""
-    try:
-        from PyQt6.QtCore import QLocale
-        code = QLocale.system().name().lower()[:2]
-        return code if code in LANGUAGES else "en"
-    except Exception:
-        return "en"
-
-def language_choice(settings: dict) -> str:
-    """The chosen language: one of LANGUAGES or 'auto' (system locale).
-    Before 1.2 the setting had no UI and every config said "en" without being used,
-    so an "en" that was never chosen in Options counts as 'auto'."""
-    code = (settings or {}).get("language", "auto")
-    if code == "en" and not (settings or {}).get("language_set"):
-        code = "auto"
-    return code if code in LANGUAGES else "auto"
-
-def resolve_language(settings: dict) -> str:
-    code = language_choice(settings)
-    return code if code in LANGUAGES else system_language()
-
-def set_language(code: str):
-    global L
-    L = load_lang(code)
-
-_qt_translator = None
-
-def install_qt_translations(qapp, code: str):
-    """Qt's own strings (Yes/No/Cancel in message boxes, context menus) in the UI
-    language; qtbase_*.qm ships with the PyQt6 wheel / bundle. English needs none."""
-    global _qt_translator
-    if code == "en" or _qt_translator is not None:
-        return
-    tr = QTranslator(qapp)
-    if tr.load(f"qtbase_{code}", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
-        qapp.installTranslator(tr)
-        _qt_translator = tr
-
-L = load_lang()
-def t(key, **kw):
-    s = L.get(key, key)
-    try:
-        return s.format(**kw) if kw else s
-    except Exception:
-        return s
 
 
 def touch_css(light: bool) -> str:

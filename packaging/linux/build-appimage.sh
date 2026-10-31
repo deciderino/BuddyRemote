@@ -40,8 +40,8 @@ mkdir -p AppDir/usr/lib AppDir/usr/share/licenses/BuddyRemote
 cp -a "$OUT/BuddyRemote" AppDir/usr/lib/
 cp build/licenses/* AppDir/usr/share/licenses/BuddyRemote/
 cp "$PKG/AppRun" AppDir/AppRun
-APP_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' app.py)"
-: "${APP_VERSION:?APP_VERSION not found in app.py}"
+APP_VERSION="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' paths.py)"
+: "${APP_VERSION:?APP_VERSION not found in paths.py}"
 cp "$PKG/buddyremote.desktop" AppDir/
 echo "X-AppImage-Version=$APP_VERSION" >> AppDir/buddyremote.desktop
 cp "$PKG/buddyremote.png" AppDir/buddyremote.png

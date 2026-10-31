@@ -1,6 +1,6 @@
 """Every language file has exactly the keys and placeholders of en.json.
 
-Qt-free: app.py is only read as text (LANGUAGES / LANGUAGE_NAMES)."""
+Qt-free: i18n.py is only read as text (LANGUAGES / LANGUAGE_NAMES)."""
 import ast
 import json
 import re
@@ -24,7 +24,7 @@ def placeholders(s):
 
 
 def app_constant(name):
-    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    src = (ROOT / "i18n.py").read_text(encoding="utf-8")   # split out of app.py in 1.3.1
     m = re.search(rf"^{name} = (.+?)\n(?=\S)", src, re.M | re.S)
     return ast.literal_eval(m.group(1).split("\n#")[0])
 
