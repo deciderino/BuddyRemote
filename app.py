@@ -13,7 +13,6 @@ import time
 import uuid
 import logging
 import random
-import hashlib
 from pathlib import Path
 
 # Set process name so system monitor / KDE show "BuddyRemote" instead of python/app.py
@@ -37,14 +36,14 @@ from PyQt6.QtWidgets import (
 
 import tiles    # host tiles: data model, templates, grid/collision logic (no Qt)
 import cacerts  # system CA store lookup for HTTPS to GitHub (no Qt, nothing bundled)
-from PyQt6.QtCore import (Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QLockFile, QUrl,
+from PyQt6.QtCore import (Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QUrl,
                           QRectF, QPointF, QPoint, QRect, QSize, QVariantAnimation, QEasingCurve,
                           QPropertyAnimation)
-from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtGui import QIcon, QActionGroup, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices, QFont, QInputDevice, QContextMenuEvent, QPainterPath
 
-# split from app.py (1.3.1): version + paths, UI languages, config, backend (CLI/ping/Buddy/updates)
-from paths import (APP_VERSION, APP_DIR, RES_DIR, PACKAGED, INSTANCE_LOCK, WINDOW_STATE_FILE,
+# split from app.py (1.3.1): version + paths, UI languages, config, backend (CLI/ping/Buddy/updates),
+# OS integration (single instance, autostart)
+from paths import (APP_VERSION, APP_DIR, RES_DIR, PACKAGED, WINDOW_STATE_FILE,
                    prepare_packaged_dir)
 from i18n import (LANGUAGES, LANGUAGE_NAMES, language_choice, resolve_language,
                   set_language, install_qt_translations, t)
@@ -52,6 +51,8 @@ from config import load_config, save_config, seed_config, ensure_client_id, setu
 from backend import (cli_available, run_cli, ping_icmp, check_buddy_api, parse_steam_status,
                      fetch_latest_release, is_newer_version, download_cli, verify_existing_cli,
                      bundled_cli_text)
+from platform_util import (acquire_lock, notify_running_instance, start_instance_server, release_lock,
+                           set_autostart)
 
 # ---------------------------------------------------------------------------
 
@@ -352,88 +353,6 @@ def dialog_stylesheet(parent=None) -> str:
 
 # ---------------------------------------------------------------------------
 
-
-# Single instance: a QLockFile in APP_DIR (Qt detects stale locks of dead processes
-# itself) plus a QLocalServer, through which a second start asks the running
-# instance to show its window. Only the process holding the lock ever releases it.
-_instance_lock: QLockFile | None = None
-_instance_server: QLocalServer | None = None
-
-def instance_server_name() -> str:
-    try:
-        user = os.getlogin()
-    except OSError:
-        user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
-    tag = hashlib.sha1(str(APP_DIR).encode()).hexdigest()[:8]
-    return f"BuddyRemote-{user}-{tag}"
-
-def acquire_lock() -> bool:
-    """True if this process is the only running instance (for this APP_DIR)."""
-    global _instance_lock
-    lock = QLockFile(str(INSTANCE_LOCK))
-    lock.setStaleLockTime(0)   # never treat a live instance's lock as stale by age
-    if lock.tryLock(200):
-        _instance_lock = lock
-        return True
-    return False
-
-def notify_running_instance() -> bool:
-    """Ask the already running instance to bring its window to the front."""
-    sock = QLocalSocket()
-    sock.connectToServer(instance_server_name())
-    if not sock.waitForConnected(1000):
-        return False
-    sock.write(b"show\n")
-    sock.flush()
-    sock.waitForBytesWritten(1000)
-    sock.disconnectFromServer()
-    return True
-
-def start_instance_server(on_show) -> bool:
-    """Primary instance: listen for 'show' requests from later starts."""
-    global _instance_server
-    name = instance_server_name()
-    QLocalServer.removeServer(name)   # leftover socket of a crashed run; we hold the lock
-    server = QLocalServer()
-    def _on_conn():
-        while server.hasPendingConnections():
-            c = server.nextPendingConnection()
-            c.readyRead.connect(lambda c=c: (c.readAll(), on_show()))
-            c.disconnected.connect(c.deleteLater)
-    server.newConnection.connect(_on_conn)
-    if not server.listen(name):
-        logging.warning("Single instance server failed: %s", server.errorString())
-        return False
-    _instance_server = server
-    return True
-
-def release_lock():
-    global _instance_lock, _instance_server
-    if _instance_server is not None:
-        _instance_server.close()
-        _instance_server = None
-    if _instance_lock is not None:
-        _instance_lock.unlock()
-        _instance_lock = None
-
-
-def set_autostart(enabled: bool):
-    d = Path.home() / ".config" / "autostart"
-    d.mkdir(parents=True, exist_ok=True)
-    f = d / "buddyremote.desktop"
-    launcher = os.environ.get("APPIMAGE") or (sys.executable if PACKAGED else APP_DIR / "BuddyRemote")
-    if enabled:
-        f.write_text(f"""[Desktop Entry]
-Type=Application
-Name=BuddyRemote
-Exec={launcher}
-Terminal=false
-Icon=buddyremote
-X-GNOME-Autostart-enabled=true
-StartupWMClass=BuddyRemote
-""")
-    else:
-        f.unlink(missing_ok=True)
 
 # ---------------------------------------------------------------------------
 class Signals(QObject):
