@@ -47,11 +47,17 @@ def bundled_cli_label() -> str:
     return f"{ver} {commit}" if commit else ver
 
 
-def child_env(packaged: bool = PACKAGED, base: dict | None = None) -> dict:
-    """Environment for external programs (MoonDeck CLI, ping). Packaged: the
+def child_env(packaged: bool = PACKAGED, base: dict | None = None, platform: str = sys.platform) -> dict:
+    """Environment for external programs (MoonDeck CLI, ping). Packaged (Linux): the
     PyInstaller bootloader points LD_LIBRARY_PATH at our bundled libs; give the child
-    the user's original value back (or none) so it loads its own / the system libs."""
+    the user's original value back (or none) so it loads its own / the system libs.
+    Packaged (Windows): unchanged except PYINSTALLER_RESET_ENVIRONMENT=1."""
     env = dict(os.environ if base is None else base)
+    if packaged and platform == "win32":
+        # Windows has no LD_LIBRARY_PATH; a PyInstaller-built custom CLI must not take
+        # our bundle's _PYI_* state for its own (PyInstaller >= 6.10).
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+        return env
     if packaged:
         orig = env.get("LD_LIBRARY_PATH_ORIG")
         if orig:
@@ -266,9 +272,21 @@ def version_tuple(v: str) -> tuple[int, ...]:
         parts.pop()
     return tuple(parts)
 
+def is_prerelease(v: str) -> bool:
+    """'1.4-preview' / '1.4rc1' / '1.4 beta' -> True; '1.4' / 'v1.4.0' -> False."""
+    import re
+    m = re.match(r"\s*[vV]?\s*\d+(?:\.\d+)*", v or "")
+    return bool(m) and bool((v or "")[m.end():].strip())
+
 def is_newer_version(remote: str, local: str = APP_VERSION) -> bool:
-    r = version_tuple(remote)
-    return bool(r) and r > version_tuple(local)
+    """remote > local by number; on equal numbers a final release is newer than a
+    pre-release of it (1.4 > 1.4-preview), never the other way round."""
+    r, lo = version_tuple(remote), version_tuple(local)
+    if not r:
+        return False
+    if r != lo:
+        return r > lo
+    return is_prerelease(local) and not is_prerelease(remote)
 
 def fetch_latest_release(timeout: float = 5.0) -> dict:
     """{'version', 'url', 'name'} of the latest release; raises on any problem."""
@@ -283,7 +301,20 @@ def fetch_latest_release(timeout: float = 5.0) -> dict:
     url = str(data.get("html_url") or "")
     if not url.startswith("https://github.com/"):
         url = "https://github.com/deciderino/BuddyRemote/releases/latest"
-    return {"version": tag.lstrip("vV").strip(), "url": url, "name": str(data.get("name") or tag)}
+    names = [str(a.get("name") or "") for a in (data.get("assets") or []) if isinstance(a, dict)]
+    return {"version": tag.lstrip("vV").strip(), "url": url, "name": str(data.get("name") or tag),
+            "has_asset": release_asset_name() in names}
+
+# Release asset of BuddyRemote for this OS (the update check only links the release page).
+def release_asset_name(platform: str = sys.platform) -> str:
+    return "BuddyRemote-Windows-x86_64.zip" if platform == "win32" else "BuddyRemote-x86_64.AppImage"
+
+def release_is_update(rel: dict, platform: str = sys.platform) -> bool:
+    """Is this release (fetch_latest_release) an update for this install? Windows: only
+    if it also ships the Windows package (a Linux-only release is not offered there)."""
+    if not is_newer_version(rel.get("version", "")):
+        return False
+    return bool(rel.get("has_asset", True)) if platform == "win32" else True
 
 # MoonDeck Buddy API the bundled CLI speaks (moondeck lib/constants.py BUDDY_API_VERSION);
 # build-appimage.sh may write it into moondeck-cli.version as "buddy_api".
@@ -436,7 +467,8 @@ def verify_existing_cli() -> tuple[bool, str]:
 def download_cli(progress_cb=None) -> bool:
     """Download and verify the MoonDeck CLI binary. Returns True on success."""
     CLI_RELEASE = "nightly"
-    CLI_URL = f"https://github.com/FrogTheFrog/moondeck/releases/download/{CLI_RELEASE}/moondeck-cli-linux.bin"
+    ASSET = cli_asset_name()
+    CLI_URL = f"https://github.com/FrogTheFrog/moondeck/releases/download/{CLI_RELEASE}/{ASSET}"
     API_URL = f"https://api.github.com/repos/FrogTheFrog/moondeck/releases/tags/{CLI_RELEASE}"
     SOURCE = "github.com/FrogTheFrog/moondeck"
 
@@ -456,7 +488,7 @@ def download_cli(progress_cb=None) -> bool:
             data = json.loads(r.read().decode())
         expected = ""
         for a in data.get("assets", []):
-            if a.get("name") == "moondeck-cli-linux.bin":
+            if a.get("name") == ASSET:
                 expected = a.get("digest", "").split(":")[-1]
                 break
 
@@ -465,7 +497,7 @@ def download_cli(progress_cb=None) -> bool:
         else:
             status("No official checksum available\n(download continues)")
 
-        status(f"Downloading\nmoondeck-cli-linux.bin\nfrom {SOURCE}")
+        status(f"Downloading\n{ASSET}\nfrom {SOURCE}")
         with urllib.request.urlopen(CLI_URL, timeout=60, context=cacerts.https_context()) as r, \
                 open(dest, "wb") as out:
             shutil.copyfileobj(r, out, 1 << 20)

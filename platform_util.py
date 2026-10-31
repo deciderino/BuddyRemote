@@ -76,11 +76,42 @@ def release_lock():
         _instance_lock = None
 
 
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"   # HKCU, per user, no admin
+RUN_VALUE = "BuddyRemote"
+
+
+def autostart_command(packaged: bool = PACKAGED, platform: str = sys.platform) -> str:
+    """Command line the OS starts at login. Windows packaged: the BuddyRemote.exe of
+    the unpacked folder; source mode: pythonw.exe app.py (no console window)."""
+    if platform == "win32":
+        if packaged:
+            return f'"{sys.executable}"'
+        exe = Path(sys.executable)
+        pyw = exe.with_name("pythonw.exe")
+        return f'"{pyw if pyw.is_file() else exe}" "{APP_DIR / "app.py"}"'
+    return str(os.environ.get("APPIMAGE") or (sys.executable if packaged else APP_DIR / "BuddyRemote"))
+
+
+def _set_autostart_windows(enabled: bool):
+    import winreg
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        if enabled:
+            winreg.SetValueEx(k, RUN_VALUE, 0, winreg.REG_SZ, autostart_command())
+        else:
+            try:
+                winreg.DeleteValue(k, RUN_VALUE)
+            except FileNotFoundError:
+                pass
+
+
 def set_autostart(enabled: bool):
+    if sys.platform == "win32":
+        _set_autostart_windows(enabled)
+        return
     d = Path.home() / ".config" / "autostart"
     d.mkdir(parents=True, exist_ok=True)
     f = d / "buddyremote.desktop"
-    launcher = os.environ.get("APPIMAGE") or (sys.executable if PACKAGED else APP_DIR / "BuddyRemote")
+    launcher = autostart_command()
     if enabled:
         f.write_text(f"""[Desktop Entry]
 Type=Application
@@ -93,3 +124,14 @@ StartupWMClass=BuddyRemote
 """)
     else:
         f.unlink(missing_ok=True)
+
+
+def set_windows_app_id():
+    """Windows: own taskbar group + icon instead of the generic python/pyinstaller one."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BuddyRemote.BuddyRemote")
+    except Exception as e:      # cosmetic only
+        logging.debug("AppUserModelID not set: %r", e)

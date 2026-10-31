@@ -14,13 +14,14 @@ import random
 from pathlib import Path
 
 # Set process name so system monitor / KDE show "BuddyRemote" instead of python/app.py
-try:
-    import ctypes
-    import ctypes.util
-    libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
-    libc.prctl(15, b"BuddyRemote", 0, 0, 0)  # PR_SET_NAME
-except Exception:
-    pass
+if sys.platform.startswith("linux"):   # Windows: the exe name is BuddyRemote.exe already
+    try:
+        import ctypes
+        import ctypes.util
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
+        libc.prctl(15, b"BuddyRemote", 0, 0, 0)  # PR_SET_NAME
+    except Exception:
+        pass
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -41,16 +42,16 @@ from PyQt6.QtGui import QIcon, QActionGroup, QColor, QPalette, QPixmap, QPainter
 
 # split from app.py (1.3.1): version + paths, UI languages, config, backend (CLI/ping/Buddy/updates),
 # OS integration (single instance, autostart), theme, input modes + gamepad, dialogs
-from paths import (APP_VERSION, APP_DIR, PACKAGED, WINDOW_STATE_FILE,
+from paths import (APP_VERSION, APP_DIR, PACKAGED, WINDOW_STATE_FILE, IS_WINDOWS, RES_DIR,
                    prepare_packaged_dir)
 from i18n import resolve_language, set_language, install_qt_translations, t
 from config import load_config, save_config, seed_config, ensure_client_id, setup_logging
 from backend import (cli_available, run_cli, ping_icmp, check_buddy_api, parse_steam_status,
-                     fetch_latest_release, is_newer_version, download_cli)
+                     fetch_latest_release, release_is_update, download_cli)
 from platform_util import (acquire_lock, notify_running_instance, start_instance_server, release_lock,
-                           set_autostart)
+                           set_autostart, set_windows_app_id)
 from theme import (touch_css, theme_palette, apply_app_theme, dialog_stylesheet, ui_colors,
-                   accent_color)
+                   accent_color, MONO_FAMILY)
 from gamepad import InputModeController, GamepadBridge
 from dialogs import install_dialog_nav, fit_dialog_to_screen, notify, OptionsDialog, DownloadDialog
 import backend  # 1.3.1: custom CLI state, Buddy API mismatch, CLI update check
@@ -2879,9 +2880,9 @@ class MainWindow(QMainWindow):
             return
         light = self.cfg.get("settings", {}).get("theme", "Dark") == "Light"
         if light:
-            self.output.setStyleSheet("QTextEdit { background: #ffffff; color: #222; border: 1px solid #ccc; font-family: monospace; }")
+            self.output.setStyleSheet("QTextEdit { background: #ffffff; color: #222; border: 1px solid #ccc; font-family: " + MONO_FAMILY + "; }")
         else:
-            self.output.setStyleSheet("QTextEdit { background: #1a1a1a; color: #ccc; border: 1px solid #333; font-family: monospace; }")
+            self.output.setStyleSheet("QTextEdit { background: #1a1a1a; color: #ccc; border: 1px solid #333; font-family: " + MONO_FAMILY + "; }")
 
     def _light(self) -> bool:
         return self.cfg.get("settings", {}).get("theme", "Dark") == "Light"
@@ -4563,7 +4564,7 @@ class MainWindow(QMainWindow):
         def worker():
             try:
                 rel = fetch_latest_release(timeout=5.0)
-                res = {"ok": True, "manual": manual, **rel, "newer": is_newer_version(rel["version"])}
+                res = {"ok": True, "manual": manual, **rel, "newer": release_is_update(rel)}
             except Exception as e:
                 cert = cacerts.is_cert_problem(e)
                 no_ca = isinstance(getattr(e, "reason", e), cacerts.NoCAStoreError)
@@ -4996,8 +4997,13 @@ def main():
     # being rounded to whole numbers. This is already the Qt 6 default; set explicitly
     # so it stays that way (all sizes in the stylesheets are device-independent px).
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
+    set_windows_app_id()
     app = QApplication(sys.argv)
     app.setApplicationName("BuddyRemote")
+    if IS_WINDOWS:   # Linux: the icon comes from the .desktop file / AppImage
+        icon = RES_DIR / "packaging" / "buddyremote.png"
+        if icon.is_file():
+            app.setWindowIcon(QIcon(str(icon)))
     if not acquire_lock():
         if notify_running_instance():
             print("BuddyRemote is already running - showing its window.")
@@ -5020,7 +5026,8 @@ def main():
     if PACKAGED:
         # Packaged: the CLI is run straight from the bundle (cli_path); never download.
         if not cli_available():
-            QMessageBox.warning(None, "BuddyRemote", t("cli_bundled_missing"))
+            QMessageBox.warning(None, "BuddyRemote",
+                                t("cli_bundled_missing_win" if IS_WINDOWS else "cli_bundled_missing"))
     elif not cli_available():
         dlg = DownloadDialog()
         dlg.show()

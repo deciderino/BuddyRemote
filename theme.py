@@ -1,7 +1,12 @@
 """BuddyRemote – Dark/Light theme: palettes, application and dialog stylesheets (incl. touch
 sizes) and the colours of the main window and the edit mode."""
 
+import sys
+
 from PyQt6.QtGui import QColor, QPalette
+
+# Monospace family for the log / license text ("monospace" is a fontconfig alias, Windows lacks it)
+MONO_FAMILY = "Consolas" if sys.platform == "win32" else "monospace"
 
 
 def touch_css(light: bool) -> str:

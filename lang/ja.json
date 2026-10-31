@@ -112,6 +112,7 @@
   "cli_bundled_ver": "同梱（{version}）",
   "cli_bundled": "同梱",
   "cli_bundled_missing": "このAppImageに同梱のMoonDeck CLIがありません。起動・シャットダウン・ペアリングは動作しません。AppImageを再ダウンロードしてください。",
+  "cli_bundled_missing_win": "このプログラムフォルダーに同梱のMoonDeck CLI（moondeck-cli.exe）がありません。起動・シャットダウン・ペアリングは動作しません。ZIPを再ダウンロードして、すべて展開してください。",
   "tile_online_status": "オンライン状態",
   "tile_steam_start_stop": "Steamを起動/終了",
   "size_klein": "小（1×1）",

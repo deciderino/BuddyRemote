@@ -112,6 +112,7 @@
   "cli_bundled_ver": "포함됨({version})",
   "cli_bundled": "포함됨",
   "cli_bundled_missing": "이 AppImage에 포함된 MoonDeck CLI가 없습니다. 켜기, 종료, 페어링이 작동하지 않으니 AppImage를 다시 다운로드하세요.",
+  "cli_bundled_missing_win": "이 프로그램 폴더에 포함된 MoonDeck CLI(moondeck-cli.exe)가 없습니다. 켜기, 종료, 페어링이 작동하지 않으니 ZIP을 다시 다운로드하여 전체 압축을 푸세요.",
   "tile_online_status": "온라인 상태",
   "tile_steam_start_stop": "Steam 시작/닫기",
   "size_klein": "작게(1×1)",

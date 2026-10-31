@@ -112,6 +112,7 @@
   "cli_bundled_ver": "bundled ({version})",
   "cli_bundled": "bundled",
   "cli_bundled_missing": "The bundled MoonDeck CLI is missing from this AppImage. Wake, shutdown and pairing will not work – please download the AppImage again.",
+  "cli_bundled_missing_win": "The bundled MoonDeck CLI (moondeck-cli.exe) is missing from this program folder. Wake, shutdown and pairing will not work – please download the ZIP again and extract it completely.",
   "tile_online_status": "Online status",
   "tile_steam_start_stop": "Start/close Steam",
   "size_klein": "Small (1×1)",

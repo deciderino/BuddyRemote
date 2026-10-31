@@ -15,7 +15,7 @@ from paths import APP_VERSION, APP_DIR, RES_DIR, PACKAGED
 from i18n import LANGUAGES, LANGUAGE_NAMES, language_choice, t
 from config import load_config
 import backend
-from theme import dialog_stylesheet, ui_colors
+from theme import dialog_stylesheet, ui_colors, MONO_FAMILY
 
 
 class _DialogNavFilter(QObject):
@@ -207,7 +207,7 @@ class LicenseDialog(QDialog):
         self.list.setMaximumWidth(320)
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
-        f = QFont("monospace")
+        f = QFont(MONO_FAMILY)
         f.setStyleHint(QFont.StyleHint.Monospace)
         f.setPixelSize(12)
         self.text.setFont(f)

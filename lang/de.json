@@ -112,6 +112,7 @@
   "cli_bundled_ver": "mitgeliefert ({version})",
   "cli_bundled": "mitgeliefert",
   "cli_bundled_missing": "Die mitgelieferte MoonDeck CLI fehlt in diesem AppImage. Wecken, Herunterfahren und Koppeln funktionieren nicht – bitte das AppImage neu herunterladen.",
+  "cli_bundled_missing_win": "Die mitgelieferte MoonDeck CLI (moondeck-cli.exe) fehlt in diesem Programmordner. Wecken, Herunterfahren und Koppeln funktionieren nicht – bitte das ZIP neu herunterladen und vollständig entpacken.",
   "tile_online_status": "Online-Status",
   "tile_steam_start_stop": "Steam starten/beenden",
   "size_klein": "Klein (1×1)",

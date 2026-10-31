@@ -112,6 +112,7 @@
   "cli_bundled_ver": "přibaleno ({version})",
   "cli_bundled": "přibaleno",
   "cli_bundled_missing": "V této AppImage chybí přibalené MoonDeck CLI. Probuzení, vypnutí a párování nebudou fungovat – stáhněte prosím AppImage znovu.",
+  "cli_bundled_missing_win": "V této složce programu chybí přibalené MoonDeck CLI (moondeck-cli.exe). Probuzení, vypnutí a párování nebudou fungovat – stáhněte prosím ZIP znovu a rozbalte ho celý.",
   "tile_online_status": "Stav online",
   "tile_steam_start_stop": "Spustit/zavřít Steam",
   "size_klein": "Malá (1×1)",

@@ -112,6 +112,7 @@
   "cli_bundled_ver": "incluso ({version})",
   "cli_bundled": "incluso",
   "cli_bundled_missing": "Il MoonDeck CLI incluso manca in questa AppImage. Accensione, spegnimento e associazione non funzioneranno: scarica di nuovo l’AppImage.",
+  "cli_bundled_missing_win": "Il MoonDeck CLI incluso (moondeck-cli.exe) manca in questa cartella del programma. Accensione, spegnimento e associazione non funzioneranno: scarica di nuovo lo ZIP ed estrailo completamente.",
   "tile_online_status": "Stato online",
   "tile_steam_start_stop": "Avvia/chiudi Steam",
   "size_klein": "Piccolo (1×1)",

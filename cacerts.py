@@ -5,11 +5,14 @@ build distro's default path (Debian: /usr/lib/ssl -> /etc/ssl/certs). On Fedora,
 Bazzite, RHEL, openSUSE etc. that path does not exist, so verification failed with
 "certificate verify failed: unable to get local issuer certificate". Here the system
 store is searched explicitly; certificate verification always stays on.
+Windows: the Windows certificate store (ssl.create_default_context() loads ROOT + CA
+from it), unless SSL_CERT_FILE / SSL_CERT_DIR point elsewhere.
 
 No Qt here (unit tested in tests/test_cacerts.py)."""
 import os
 import re
 import ssl
+import sys
 
 # Bundle files, in this order (first existing, loadable one wins).
 CA_FILES = (
@@ -82,9 +85,19 @@ def candidates(env=None):
 _cache = {}
 
 
-def find_ca_store(env=None, use_cache=True):
+WINDOWS_STORE = ("winstore", "Windows certificate store", "system")
+
+
+def _env_override(env) -> bool:
+    return bool(env.get("SSL_CERT_FILE") or env.get("SSL_CERT_DIR"))
+
+
+def find_ca_store(env=None, use_cache=True, platform=sys.platform):
     """First usable (kind, path, source), or None. Skipped candidates are reported in
-    the NoCAStoreError message by https_context()."""
+    the NoCAStoreError message by https_context(). Windows without SSL_CERT_* override:
+    WINDOWS_STORE."""
+    if platform == "win32" and not _env_override(os.environ if env is None else env):
+        return WINDOWS_STORE
     key = None
     if use_cache and env is None:
         key = (os.environ.get("SSL_CERT_FILE"), os.environ.get("SSL_CERT_DIR"))
@@ -101,10 +114,16 @@ def find_ca_store(env=None, use_cache=True):
     return found
 
 
-def https_context(env=None, use_cache=True) -> ssl.SSLContext:
+def https_context(env=None, use_cache=True, platform=sys.platform) -> ssl.SSLContext:
     """Verifying TLS client context with the system CA store (hostname check + CERT_REQUIRED,
     as ssl.create_default_context()). Raises NoCAStoreError if none is found."""
-    found = find_ca_store(env, use_cache)
+    found = find_ca_store(env, use_cache, platform)
+    if found == WINDOWS_STORE:
+        ctx = ssl.create_default_context()
+        if not ctx.cert_store_stats().get("x509_ca", 0):
+            raise NoCAStoreError("the Windows certificate store has no root certificates")
+        assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+        return ctx
     if found is None:
         checked = ", ".join(p for _, p, _ in candidates(env))
         raise NoCAStoreError("no system CA certificate store found (checked: %s). "
