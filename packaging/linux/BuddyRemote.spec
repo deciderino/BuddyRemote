@@ -25,7 +25,8 @@ a = Analysis(
         (os.path.join(BUILD, "bundled"), "bundled"),
         (os.path.join(BUILD, "licenses"), "licenses"),
     ],
-    excludes=["tkinter", "sdl2dll", "sdl2.ext", "numpy", "PIL"],
+    # certifi: no own CA list is shipped; cacerts.py uses the system CA store
+    excludes=["tkinter", "sdl2dll", "sdl2.ext", "numpy", "PIL", "certifi"],
 )
 
 def _keep(entry):
