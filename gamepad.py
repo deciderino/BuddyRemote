@@ -99,6 +99,8 @@ class InputModeController(QObject):
         win = self.win
         kind, hid, idx = self._last_main or (None, None, 0)
         try:
+            if kind == "toolbar" and getattr(win, "_tb_collapsed", False):
+                return win.tb_grip              # collapsed bar: its buttons are hidden
             if kind == "toolbar":
                 return win.toolbar_buttons[idx]
             if kind == "log":
@@ -116,7 +118,7 @@ class InputModeController(QObject):
             for b in r.nav_buttons:
                 if win._navigable(b):
                     return b
-        return win.toolbar_buttons[0]
+        return win.tb_grip if getattr(win, "_tb_collapsed", False) else win.toolbar_buttons[0]
 
     @staticmethod
     def _focusable(w, win):

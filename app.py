@@ -4029,6 +4029,7 @@ class MainWindow(QMainWindow):
         full = max(self.toolbar.sizeHint().height(), self.toolbar.minimumSizeHint().height())
         if on:
             had_focus = self.toolbar.isAncestorOf(QApplication.focusWidget()) if QApplication.focusWidget() else False
+            self._tb_grip_focus = had_focus     # focused in _tb_collapse_done: the grip is hidden until then
             if animate and self.isVisible():
                 anim = QPropertyAnimation(self.toolbar, b"maximumHeight", self)
                 anim.setDuration(160)
@@ -4040,12 +4041,13 @@ class MainWindow(QMainWindow):
                 anim.start()
             else:
                 self._tb_collapse_done()
-            if had_focus:
-                self.tb_grip.setFocus(Qt.FocusReason.OtherFocusReason)
         else:
+            grip_focus = self.tb_grip.hasFocus()
             self.tb_grip.hide()
             self.toolbar.setMaximumHeight(0)
             self.toolbar.show()
+            if grip_focus:                      # keep the ring in the bar (controller/keyboard)
+                self.tb_btns[self._tb_items[0]["id"]].setFocus(Qt.FocusReason.OtherFocusReason)
             if animate and self.isVisible():
                 anim = QPropertyAnimation(self.toolbar, b"maximumHeight", self)
                 anim.setDuration(160)
@@ -4073,6 +4075,9 @@ class MainWindow(QMainWindow):
         self.toolbar.hide()
         self.toolbar.setMaximumHeight(16777215)
         self.tb_grip.show()
+        if getattr(self, "_tb_grip_focus", False):
+            self._tb_grip_focus = False
+            self.tb_grip.setFocus(Qt.FocusReason.OtherFocusReason)
         self._fit_min_size()
 
     def _tb_expand_done(self):
