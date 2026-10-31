@@ -186,29 +186,59 @@ def cli_available() -> bool:
     path = _custom["path"]
     return bool(path) and Path(path).is_file()
 
-def _exec_cli(cli: Path, args: list, timeout, config_override: Path | None):
+def _exec_cli(cli: Path, args: list, timeout, config_override: Path | None, on_start=None):
     cfg = str(config_override or CONFIG_FILE)
     cmd = [str(cli), "--config-file", cfg] + args
     logging.debug("CLI %s", cmd)
     # cwd: the writable user/app dir (never the read-only bundle)
-    p = subprocess.run(cmd, cwd=str(APP_DIR), capture_output=True, text=True,
-                       timeout=timeout, env=child_env(), **_no_window())
+    if on_start is None:
+        p = subprocess.run(cmd, cwd=str(APP_DIR), capture_output=True, text=True,
+                           timeout=timeout, env=child_env(), **_no_window())
+        logging.debug("CLI rc=%s", p.returncode)
+        return p.returncode, p.stdout, p.stderr
+    # cancellable (pairing): the caller gets the process to stop it
+    with subprocess.Popen(cmd, cwd=str(APP_DIR), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, env=child_env(), **_no_window()) as p:
+        on_start(p)
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            raise
     logging.debug("CLI rc=%s", p.returncode)
-    return p.returncode, p.stdout, p.stderr
+    return p.returncode, out, err
 
-def run_cli(args: list, timeout=90, config_override: Path | None = None) -> tuple[int, str, str]:
+def stop_cli(p, grace: float = 3.0):
+    """Stop a running CLI: SIGINT first (the MoonDeck CLI then cancels its pairing at
+    Buddy), hard kill after `grace` seconds. Windows: terminate() right away."""
+    if p is None or p.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            p.terminate()
+            return
+        import signal
+        p.send_signal(signal.SIGINT)
+        p.wait(grace)
+    except subprocess.TimeoutExpired:
+        p.kill()
+    except OSError:
+        pass
+
+def run_cli(args: list, timeout=90, config_override: Path | None = None, on_start=None) -> tuple[int, str, str]:
     cli = active_cli()
     if not cli.is_file():
         return -1, "", t("cli_not_found")
     try:
         try:
-            return _exec_cli(cli, args, timeout, config_override)
+            return _exec_cli(cli, args, timeout, config_override, on_start)
         except OSError as e:
             if cli == CLI_BIN or not CLI_BIN.is_file():
                 raise
             # the custom CLI did not even start: nothing ran, the bundled one takes over
             _custom_start_failed(cli, str(e))
-            return _exec_cli(CLI_BIN, args, timeout, config_override)
+            return _exec_cli(CLI_BIN, args, timeout, config_override, on_start)
     except subprocess.TimeoutExpired:
         return -1, "", "Timeout"
     except Exception as e:

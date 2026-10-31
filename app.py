@@ -4243,13 +4243,29 @@ class MainWindow(QMainWindow):
         except Exception as e:
             return
 
-        # Pre-check: can we reach Buddy's API?
-        ok, msg = check_buddy_api(ip, host.get("buddy_port", 59999))
-        if not ok:
-            notify(self, t("pairing_unreachable", ip=ip, port=host.get('buddy_port', 59999)),
-                   f"{msg}\n\n" + t("pairing_unreachable_hint"), kind="error")
+        # Pre-check: can we reach Buddy's API? (worker thread: up to 5 s, the GUI keeps running)
+        if getattr(self, "_pair_precheck", False):
             return
-        self.log_output(f"Buddy reachable: {msg}")
+        self._pair_precheck = True
+        pre = {}
+        threading.Thread(target=lambda: pre.update(r=check_buddy_api(ip, host.get("buddy_port", 59999))),
+                         daemon=True).start()
+
+        def wait_precheck():
+            if "r" not in pre:
+                QTimer.singleShot(50, wait_precheck)
+                return
+            self._pair_precheck = False
+            ok, msg = pre["r"]
+            if not ok:
+                notify(self, t("pairing_unreachable", ip=ip, port=host.get('buddy_port', 59999)),
+                       f"{msg}\n\n" + t("pairing_unreachable_hint"), kind="error")
+                return
+            self.log_output(f"Buddy reachable: {msg}")
+            self._start_pairing_cli(host, ip, pin)
+        wait_precheck()
+
+    def _start_pairing_cli(self, host: dict, ip: str, pin: str):
 
         cli_cfg = {
             "version": 1,
@@ -4281,16 +4297,22 @@ class MainWindow(QMainWindow):
         except Exception as e:
             return
 
-        result = {"done": False, "ok": False, "msg": ""}
+        result = {"done": False, "ok": False, "msg": "", "cancelled": False, "proc": None}
+
+        def started(p):
+            result["proc"] = p
+            if result["cancelled"]:          # Cancel came before the CLI was up
+                threading.Thread(target=backend.stop_cli, args=(p,), daemon=True).start()
 
         def worker():
             try:
                 rc, out, err = run_cli(
                     ["host", "pair", ip, "--pin", pin, "--buddy-port", str(host.get("buddy_port", 59999))],
                     timeout=180,
-                    config_override=tmp
+                    config_override=tmp,
+                    on_start=started
                 )
-                result["ok"] = rc == 0
+                result["ok"] = rc == 0 and not result["cancelled"]
                 result["msg"] = (out or err or "").strip()
                 if result["ok"]:
                     self._fetch_and_save_mac(host, tmp)
@@ -4305,6 +4327,8 @@ class MainWindow(QMainWindow):
 
         # Poll until done or user cancels
         def check():
+            if result["cancelled"]:
+                return                       # no "pairing failed" after Cancel
             if result["done"]:
                 try:
                     dlg.close()
@@ -4324,9 +4348,12 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(500, check)
 
         def on_cancel():
-            # Best effort: we can't easily kill the CLI, but close dialog
+            # stop the CLI (SIGINT: it cancels the pairing at Buddy); the worker then
+            # removes the temporary config. Never blocks the GUI.
+            result["cancelled"] = True
             dlg.close()
-            result["done"] = True
+            self.log_output(f"Pairing with {ip} cancelled")
+            threading.Thread(target=backend.stop_cli, args=(result["proc"],), daemon=True).start()
 
         dlg.button(QMessageBox.StandardButton.Cancel).clicked.connect(on_cancel)
 
