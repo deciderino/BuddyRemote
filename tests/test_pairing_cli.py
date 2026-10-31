@@ -6,7 +6,7 @@ fake CLI's "buddy_api" file):
 - R2: Cancel in the pairing dialog stops the CLI (no late completion, no MAC fetch, temp config
   removed, no "pairing failed" notification).
 - R3: the Buddy pre-check of start_pairing runs off the GUI thread.
-The fake CLI is a shebang script: POSIX only.
+The fake CLI is a shebang script: POSIX only (WinStopCliTests: Windows only).
     QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_pairing_cli -v
 """
 import ast
@@ -252,3 +252,39 @@ class PrecheckThreadTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows process tree")
+class WinStopCliTests(unittest.TestCase):
+    def test_stop_cli_ends_child_of_onefile_like_cli(self):
+        # the bundled Windows CLI is a Nuitka onefile too: terminate() of its bootstrap
+        # alone leaves the real CLI process running
+        import subprocess
+        sys.path.insert(0, os.path.dirname(HERE))
+        import backend
+        code = ("import subprocess,sys,time; c = subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(30)']); print(c.pid, flush=True); time.sleep(30)")
+        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        child = int(p.stdout.readline())
+        self.assertIn(child, backend._win_child_pids(p.pid))
+        backend.stop_cli(p)
+        self.assertIsNotNone(p.wait(5))
+        p.stdout.close()
+        t0 = time.monotonic()
+        while child in backend._win_child_pids(p.pid) or self._alive(child):
+            if time.monotonic() - t0 > 5:
+                self.fail("child of the CLI survives Cancel")
+            time.sleep(0.1)
+
+    @staticmethod
+    def _alive(pid):
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32")
+        k32.OpenProcess.restype = ctypes.c_void_p
+        h = k32.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        k32.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(code))
+        k32.CloseHandle(ctypes.c_void_p(h))
+        return code.value == 259                          # STILL_ACTIVE

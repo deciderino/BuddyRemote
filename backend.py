@@ -225,13 +225,62 @@ def _signal_cli(p, sig):
         pass
     p.send_signal(sig)
 
+def _win_child_pids(root: int) -> list:
+    """Windows: PIDs of all descendants of `root` (deepest first), via a Toolhelp snapshot."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PE32(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_char * 260)]
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)          # TH32CS_SNAPPROCESS
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return []
+    parent = {}
+    try:
+        e = PE32()
+        e.dwSize = ctypes.sizeof(PE32)
+        ok = k32.Process32First(wintypes.HANDLE(snap), ctypes.byref(e))
+        while ok:
+            parent[e.th32ProcessID] = e.th32ParentProcessID
+            ok = k32.Process32Next(wintypes.HANDLE(snap), ctypes.byref(e))
+    finally:
+        k32.CloseHandle(wintypes.HANDLE(snap))
+    out, todo = [], [root]
+    while todo:
+        cur = todo.pop()
+        kids = [pid for pid, pp in parent.items() if pp == cur and pid not in (root, cur) and pid not in out]
+        out[:0] = kids
+        todo.extend(kids)
+    return out
+
+def _win_terminate(pid: int):
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = ctypes.c_void_p
+    h = k32.OpenProcess(0x0001, False, pid)              # PROCESS_TERMINATE
+    if h:
+        k32.TerminateProcess(ctypes.c_void_p(h), 1)
+        k32.CloseHandle(ctypes.c_void_p(h))
+
 def stop_cli(p, grace: float = 3.0):
     """Stop a running CLI: SIGINT first (the MoonDeck CLI then cancels its pairing at
-    Buddy), hard kill after `grace` seconds. Windows: terminate() right away."""
+    Buddy), hard kill after `grace` seconds. Windows: terminate the CLI and its child
+    processes right away (no Buddy abort there; the pairing ends with Buddy's timeout)."""
     if p is None or p.poll() is not None:
         return
     try:
         if sys.platform == "win32":
+            try:                                    # the onefile payload first (the bootstrap
+                for pid in _win_child_pids(p.pid):  # does not end it), then the bootstrap
+                    _win_terminate(pid)
+            except Exception:
+                logging.debug("CLI child processes not stopped", exc_info=True)
             p.terminate()
             return
         import signal
