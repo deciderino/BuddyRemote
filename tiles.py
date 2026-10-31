@@ -53,13 +53,6 @@ TYPES = {
 }
 TYPE_ORDER = ("online_status", "boot", "shutdown", "neustart",
               "standby", "ruhezustand", "steam_start_stop")
-# Types of earlier versions that no longer exist. Saved entries of these types are
-# dropped on load (migrate_host / normalize); everything else unknown is preserved.
-# "steam_status": the Steam status tile; the card header shows "▶ Steam läuft" instead
-# (global switch in the settings).
-REMOVED_TYPES = ("steam_status",)
-
-
 def _t(typ, size, col, row, visible=True):
     return {"typ": typ, "sichtbar": visible, "groesse": size, "pos": [col, row]}
 
@@ -98,39 +91,7 @@ TEMPLATES = {
 }
 TEMPLATE_ORDER = ("standard", "minimal", "server", "gaming")
 DEFAULT_TEMPLATE = "standard"
-LAYOUT_REV = 2          # host["layout_rev"]; below 2: status tiles still visible (see migrate_host)
-
-# Templates of layout revision 1 (status tiles on top). Only used to recognise an
-# unchanged template layout during the migration to revision 2.
-OLD_TEMPLATES = {
-    # 1.2 layout: status line, then all power buttons, then Steam
-    "standard": [
-        _t("online_status", "mittel", 0, 0), _t("steam_status", "mittel", 2, 0),
-        _t("boot", "klein", 0, 1), _t("shutdown", "klein", 1, 1),
-        _t("neustart", "klein", 2, 1), _t("standby", "klein", 3, 1),
-        _t("ruhezustand", "klein", 0, 2), _t("steam_start_stop", "klein", 1, 2),
-    ],
-    "minimal": [
-        _t("online_status", "breit", 0, 0),
-        _t("boot", "mittel", 0, 1), _t("shutdown", "mittel", 2, 1),
-        _t("steam_status", "mittel", 0, 2, False), _t("neustart", "klein", 0, 3, False),
-        _t("standby", "klein", 1, 3, False), _t("ruhezustand", "klein", 2, 3, False),
-        _t("steam_start_stop", "klein", 3, 3, False),
-    ],
-    "server": [
-        _t("online_status", "breit", 0, 0),
-        _t("boot", "mittel", 0, 1), _t("neustart", "klein", 2, 1), _t("shutdown", "klein", 3, 1),
-        _t("standby", "klein", 0, 2, False), _t("ruhezustand", "klein", 1, 2, False),
-        _t("steam_status", "mittel", 2, 2, False), _t("steam_start_stop", "klein", 0, 3, False),
-    ],
-    "gaming": [
-        _t("online_status", "mittel", 0, 0), _t("steam_status", "mittel", 2, 0),
-        _t("boot", "gross", 0, 1), _t("steam_start_stop", "gross", 2, 1),
-        _t("shutdown", "klein", 0, 3), _t("neustart", "klein", 1, 3),
-        _t("standby", "klein", 2, 3), _t("ruhezustand", "klein", 3, 3),
-    ],
-}
-
+LAYOUT_REV = 2          # host["layout_rev"]: layout revision, see migrate_host
 
 def copy_tiles(tiles):
     out = []
@@ -147,37 +108,6 @@ def copy_tiles(tiles):
 
 def template(name=DEFAULT_TEMPLATE):
     return copy_tiles(TEMPLATES.get(name) or TEMPLATES[DEFAULT_TEMPLATE])
-
-
-def is_removed(tile) -> bool:
-    """An entry of a tile type that was removed (see REMOVED_TYPES)."""
-    return isinstance(tile, dict) and tile.get("typ") in REMOVED_TYPES
-
-
-def drop_removed(tiles):
-    """Remove the entries of removed tile types. Rows that became empty *only* because
-    a visible removed tile is gone are closed (the tiles below move up), so no hole is
-    left; rows the user left empty on purpose stay empty. Returns a new list."""
-    tiles = copy_tiles(tiles)
-    if not any(is_removed(a) for a in tiles):
-        return tiles
-    def ok(a):
-        return isinstance(a, dict) and _valid_pos(a.get("pos")) and a.get("groesse") in SIZES
-
-    def rows(ts):
-        out = set()
-        for a in ts:
-            if ok(a) and a.get("sichtbar", True) and (is_known(a) or is_removed(a)):
-                out |= {r for (_, r) in cells(a["pos"], a["groesse"])}
-        return out
-    before = rows(tiles)
-    kept = [a for a in tiles if not is_removed(a)]
-    gone = sorted(before - rows(kept))
-    if gone:
-        for a in kept:
-            if is_known(a) and ok(a):
-                a["pos"] = [a["pos"][0], a["pos"][1] - sum(1 for r in gone if r < a["pos"][1])]
-    return kept
 
 
 def is_known(tile) -> bool:
@@ -241,8 +171,6 @@ def normalize(tiles):
     for a in tiles if isinstance(tiles, list) else []:
         if not isinstance(a, dict):
             continue                         # broken entry (hand-edited config): dropped
-        if is_removed(a):
-            continue                         # type removed in this version (REMOVED_TYPES)
         if not is_known(a):
             out.append(a)                    # unknown type (newer version): preserved as-is
             continue
@@ -281,50 +209,11 @@ def normalize(tiles):
     return [a for a in out if not (is_dup(a) and not a["sichtbar"])]    # no room: drop duplicate
 
 
-def _visible_key(ts):
-    return sorted((a["typ"], a["groesse"], tuple(a["pos"])) for a in ts
-                  if is_active(a) and _valid_pos(a.get("pos")) and a.get("groesse") in SIZES)
-
-
-def calm_status(tiles):
-    """Layout revision 1 -> 2: hide the status tiles (the card header shows the status now).
-
-    - A layout that still equals one of the old templates becomes the new version of that
-      template (unknown entries are kept, at the end).
-    - Any other (custom) layout keeps every position; only online_status is hidden and the
-      removed steam_status tile is dropped; rows that became empty *only* because of that
-      are removed (the tiles below move up), so no hole is left where the status line was. Rows the user left
-      empty on purpose stay empty.
-    """
-    tiles = copy_tiles(tiles)
-    known = [a for a in tiles if is_known(a)]
-    mine = _visible_key(known)
-    old_known = lambda ts: [a for a in ts if is_known(a)]    # noqa: E731 (removed types ignored)
-    for name in TEMPLATE_ORDER:
-        if mine and _visible_key(old_known(OLD_TEMPLATES[name])) == mine and not any(is_dup(a) for a in known):
-            return template(name) + [a for a in tiles if not is_known(a) and not is_removed(a)]
-    ok = [a for a in tiles if is_active(a) and _valid_pos(a.get("pos")) and a.get("groesse") in SIZES]
-    gone_types = [a for a in tiles if is_removed(a) and a.get("sichtbar", True)
-                  and _valid_pos(a.get("pos")) and a.get("groesse") in SIZES]
-    before = {r for (_, r) in occupied(ok)} | {r for a in gone_types for (_, r) in cells(a["pos"], a["groesse"])}
-    tiles = [a for a in tiles if not is_removed(a)]
-    for a in tiles:
-        if is_known(a) and a["typ"] in STATUS_TYPES:
-            a["sichtbar"] = False
-    after = {r for (_, r) in occupied([a for a in ok if is_active(a)])}
-    gone = sorted(before - after)
-    if gone:
-        for a in ok:
-            if is_active(a):
-                a["pos"] = [a["pos"][0], a["pos"][1] - sum(1 for r in gone if r < a["pos"][1])]
-    return tiles
-
-
 def migrate_host(host: dict) -> bool:
-    """1.2 -> 1.3: hosts without ``aktionen`` get the default template; existing
-    lists from an older layout revision get the calm status (see calm_status), then
-    every list is normalized (entries that are no dict are dropped there). Returns
-    True if the host dict was changed."""
+    """1.2 -> 1.3: hosts without ``aktionen`` get the default template. Every list is
+    normalized (entries that are no dict are dropped there) and gets the current
+    ``layout_rev`` (the hook for later layout migrations). Returns True if the host
+    dict was changed."""
     if not isinstance(host.get("aktionen"), list):
         host["aktionen"] = template(DEFAULT_TEMPLATE)
         host["layout_rev"] = LAYOUT_REV
@@ -332,11 +221,9 @@ def migrate_host(host: dict) -> bool:
     changed = False
     rev = host.get("layout_rev")
     if not isinstance(rev, int) or isinstance(rev, bool) or rev < LAYOUT_REV:
-        host["aktionen"] = calm_status(host["aktionen"])
+        # (no layout changes between revisions yet: the status tiles of the 1.3
+        # drafts, layout revision 1, were never released)
         host["layout_rev"] = LAYOUT_REV
-        changed = True
-    if any(is_removed(a) for a in host["aktionen"]):
-        host["aktionen"] = drop_removed(host["aktionen"])
         changed = True
     new = normalize(host["aktionen"])
     if new != host["aktionen"]:

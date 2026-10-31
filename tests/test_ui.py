@@ -35,7 +35,7 @@ def _config():
     names = ["Gaming-PC", "Workstation", "HTPC"]
     hosts = [{"id": f"h{i}", "name": names[i], "ip": f"192.0.2.{10 + i}",
               "mac": "00:00:5E:00:53:1%d" % i, "buddy_port": 59999} for i in range(3)]
-    hosts[1]["aktionen"] = tiles.copy_tiles(tiles.OLD_TEMPLATES["minimal"])       # 1.3 draft layout, rev 1
+    hosts[1]["aktionen"] = tiles.template("minimal")      # tile list without layout_rev
     hosts[2]["aktionen"] = tiles.template("server")
     hosts[2]["layout_rev"] = tiles.LAYOUT_REV
     return {"version": 1, "hosts": hosts,
@@ -231,7 +231,9 @@ class CalmStatusTests(UiTestCase):
         css = row.dot.styleSheet()
         return css.split("background:")[1].split(";")[0].strip()
 
-    def test_migration_hides_status_tiles(self):
+    def test_migration_status_tiles_hidden(self):
+        """1.2 host (h0) gets the template, a list without layout_rev (h1) the current
+        revision; the status tiles are hidden by default in both."""
         for hid in ("h0", "h1"):
             ts = self.host(hid)["aktionen"]
             for typ in tiles.STATUS_TYPES:

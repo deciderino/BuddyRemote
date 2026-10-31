@@ -144,13 +144,17 @@ def system_language() -> str:
     except Exception:
         return "en"
 
-def resolve_language(settings: dict) -> str:
-    """Language from settings.language: one of LANGUAGES or 'auto' (system locale).
+def language_choice(settings: dict) -> str:
+    """The chosen language: one of LANGUAGES or 'auto' (system locale).
     Before 1.2 the setting had no UI and every config said "en" without being used,
     so an "en" that was never chosen in Options counts as 'auto'."""
     code = (settings or {}).get("language", "auto")
     if code == "en" and not (settings or {}).get("language_set"):
         code = "auto"
+    return code if code in LANGUAGES else "auto"
+
+def resolve_language(settings: dict) -> str:
+    code = language_choice(settings)
     return code if code in LANGUAGES else system_language()
 
 def set_language(code: str):
@@ -504,8 +508,7 @@ def load_config() -> dict:
         data.setdefault("hosts", [])
         changed = sanitize_config(data)
         # 1.2 -> 1.3: every host gets its tile list ("aktionen"); a 1.2 config gets
-        # the standard template (no automatic backup copy). Layouts of an older layout revision get the calm
-        # status (status tiles hidden, see tiles.calm_status). Unknown keys/types are kept.
+        # the standard template (no automatic backup copy). Unknown keys/types are kept.
         for h in data["hosts"]:
             changed |= tiles.migrate_host(h)
         if changed:
@@ -2819,7 +2822,7 @@ class HostDialog(QDialog):
             "buddy_port": self._port() or 59999,
         })
         if self.host is None:
-            # the chosen template, exact positions (new layout revision: calm status)
+            # the chosen template, exact positions, current layout revision
             data["aktionen"] = tiles.copy_tiles(self._tiles)
             data["layout_rev"] = tiles.LAYOUT_REV
         return data
@@ -2941,10 +2944,7 @@ class OptionsDialog(QDialog):
         self.language.addItem(t("lang_auto"), "auto")
         for code in LANGUAGES:
             self.language.addItem(LANGUAGE_NAMES[code], code)
-        cur = settings.get("language", "auto")
-        if cur == "en" and not settings.get("language_set"):
-            cur = "auto"
-        self.language.setCurrentIndex(max(0, self.language.findData(cur)))
+        self.language.setCurrentIndex(max(0, self.language.findData(language_choice(settings))))
         layout.addRow(t("language"), self.language)
 
         self.show_ip = QCheckBox(t("show_ip"))         # off: the IP is only in the tooltip
