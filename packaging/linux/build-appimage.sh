@@ -18,7 +18,7 @@ rm -rf build dist/BuddyRemote AppDir
 mkdir -p build/bundled build/licenses build/libsdl2
 cp "$MOONDECK_CLI" build/bundled/moondeck-cli && chmod 755 build/bundled/moondeck-cli
 # Version info for the Options dialog ("MoonDeck CLI: bundled (nightly, commit 00f8c31)");
-# the app also re-copies the CLI into the user dir when this file changes.
+# the app runs the CLI straight from the bundle (usr/lib/BuddyRemote/_internal/bundled).
 printf '{"version": "%s", "commit": "%s", "sha256": "%s"}\n' \
   "${MOONDECK_CLI_VERSION:-nightly}" "${MOONDECK_CLI_COMMIT:-00f8c31}" "$MOONDECK_CLI_SHA256" \
   > build/bundled/moondeck-cli.version

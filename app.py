@@ -46,7 +46,7 @@ from PyQt6.QtCore import (Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QL
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtGui import QIcon, QActionGroup, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices, QFont, QInputDevice, QContextMenuEvent, QPainterPath
 
-APP_VERSION = "1.3"
+APP_VERSION = "1.3.1"
 
 # ---------------------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent
@@ -58,9 +58,8 @@ if PACKAGED:
     APP_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "BuddyRemote"
 CONFIG_FILE = APP_DIR / "config.json"
 SEED_CONFIG = RES_DIR / "packaging" / "default-config.json"   # first-start defaults
-CLI_DIR = APP_DIR / "cli"
-CLI_BIN = CLI_DIR / "moondeck-cli"
-CLI_SCRIPT = CLI_DIR / "cli.py"  # fallback
+CLI_DIR = APP_DIR / "cli"          # source mode: download_cli() puts the CLI here
+BUNDLED_DIR = RES_DIR / "bundled"  # packaged: CLI + version file from build-appimage.sh
 LANG_DIR = RES_DIR / "lang"
 INSTANCE_LOCK = APP_DIR / ".instance.lock"
 LOG_FILE = APP_DIR / "buddyremote.log"
@@ -73,37 +72,27 @@ def seed_config():
     if not CONFIG_FILE.exists() and SEED_CONFIG.is_file():
         shutil.copyfile(SEED_CONFIG, CONFIG_FILE)
 
+def cli_path(packaged: bool = PACKAGED) -> Path:
+    """The MoonDeck CLI that run_cli starts. Packaged: straight from the bundle (no
+    copy; a cli/ copy left by 1.3 in the user dir is no longer used). Source mode:
+    the one download_cli() fetched into APP_DIR/cli."""
+    return BUNDLED_DIR / "moondeck-cli" if packaged else CLI_DIR / "moondeck-cli"
+
+CLI_BIN = cli_path()
+
 def prepare_packaged_dir():
-    """Packaging only: create the user dir and seed it from the bundle on first start."""
+    """Packaging only: create the user dir (config, log, lock live there)."""
     if not PACKAGED:
         return
     APP_DIR.mkdir(parents=True, exist_ok=True)
-    bundled_cli = RES_DIR / "bundled" / "moondeck-cli"
-    bundled_ver = RES_DIR / "bundled" / "moondeck-cli.version"
-    local_ver = CLI_DIR / "moondeck-cli.version"
-    # Copy the bundled CLI on first start, and again when a newer AppImage brings a
-    # different CLI build (its version file differs from the copied one).
-    outdated = (bundled_ver.exists() and
-                (not local_ver.exists() or local_ver.read_bytes() != bundled_ver.read_bytes()))
-    if bundled_cli.exists() and (not CLI_BIN.exists() or outdated):
-        CLI_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = CLI_BIN.with_suffix(".tmp")
-        shutil.copyfile(bundled_cli, tmp)
-        tmp.chmod(0o755)
-        tmp.replace(CLI_BIN)
-        if bundled_ver.exists():
-            shutil.copyfile(bundled_ver, local_ver)
 
 def bundled_cli_info() -> dict | None:
     """Packaged mode: {'version', 'commit', 'sha256'} written by build-appimage.sh."""
-    for p in (RES_DIR / "bundled" / "moondeck-cli.version", CLI_DIR / "moondeck-cli.version"):
-        try:
-            d = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(d, dict):
-                return d
-        except Exception:
-            continue
-    return None
+    try:
+        d = json.loads((BUNDLED_DIR / "moondeck-cli.version").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return d if isinstance(d, dict) else None
 
 def bundled_cli_text() -> str:
     info = bundled_cli_info() or {}
@@ -573,20 +562,32 @@ def save_config(cfg: dict):
     tmp.replace(CONFIG_FILE)
 
 # ---------------------------------------------------------------------------
+def child_env(packaged: bool = PACKAGED, base: dict | None = None) -> dict:
+    """Environment for external programs (MoonDeck CLI, ping). Packaged: the
+    PyInstaller bootloader points LD_LIBRARY_PATH at our bundled libs; give the child
+    the user's original value back (or none) so it loads its own / the system libs."""
+    env = dict(os.environ if base is None else base)
+    if packaged:
+        orig = env.get("LD_LIBRARY_PATH_ORIG")
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    return env
+
 def cli_available() -> bool:
-    return CLI_BIN.exists() or CLI_SCRIPT.exists()
+    return CLI_BIN.is_file()
 
 def run_cli(args: list, timeout=90, config_override: Path | None = None) -> tuple[int, str, str]:
     if not cli_available():
         return -1, "", t("cli_not_found")
     cfg = str(config_override or CONFIG_FILE)
-    if CLI_BIN.exists():
-        cmd = [str(CLI_BIN), "--config-file", cfg] + args
-    else:
-        cmd = [sys.executable, str(CLI_SCRIPT), "--config-file", cfg] + args
+    cmd = [str(CLI_BIN), "--config-file", cfg] + args
     logging.debug("CLI %s", cmd)
     try:
-        p = subprocess.run(cmd, cwd=str(CLI_DIR), capture_output=True, text=True, timeout=timeout)
+        # cwd: the writable user/app dir (never the read-only bundle)
+        p = subprocess.run(cmd, cwd=str(APP_DIR), capture_output=True, text=True,
+                           timeout=timeout, env=child_env())
         logging.debug("CLI rc=%s", p.returncode)
         return p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
@@ -610,14 +611,7 @@ def ping_icmp(ip: str, timeout_s: int = 1) -> bool:
         cmd = ["ping", "-c", "1", "-t", str(max(1, int(timeout_s))), ip]
     else:
         cmd = ["ping", "-c", "1", "-W", str(max(1, int(timeout_s))), ip]
-    env = os.environ.copy()
-    if getattr(sys, "frozen", False):
-        # PyInstaller/AppImage: do not hand our bundled libs to a system binary
-        orig = env.get("LD_LIBRARY_PATH_ORIG")
-        if orig:
-            env["LD_LIBRARY_PATH"] = orig
-        else:
-            env.pop("LD_LIBRARY_PATH", None)
+    env = child_env()       # packaged: do not hand our bundled libs to a system binary
     kw = {"creationflags": 0x08000000} if win else {}   # CREATE_NO_WINDOW
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
@@ -796,7 +790,7 @@ def download_cli(progress_cb=None) -> bool:
     SOURCE = "github.com/FrogTheFrog/moondeck"
 
     CLI_DIR.mkdir(parents=True, exist_ok=True)
-    dest = CLI_DIR / "moondeck-cli"
+    dest = CLI_BIN                       # source mode: CLI_DIR / "moondeck-cli"
 
     def status(msg, pause=1.2):
         if progress_cb:
@@ -870,7 +864,7 @@ def set_autostart(enabled: bool):
     d = Path.home() / ".config" / "autostart"
     d.mkdir(parents=True, exist_ok=True)
     f = d / "buddyremote.desktop"
-    launcher = os.environ.get("APPIMAGE") or (sys.executable if getattr(sys, "frozen", False) else APP_DIR / "BuddyRemote")
+    launcher = os.environ.get("APPIMAGE") or (sys.executable if PACKAGED else APP_DIR / "BuddyRemote")
     if enabled:
         f.write_text(f"""[Desktop Entry]
 Type=Application
@@ -6480,7 +6474,7 @@ def main():
 
     # Ensure CLI is present
     if PACKAGED:
-        # Packaged: the CLI comes from the bundle (prepare_packaged_dir); never download.
+        # Packaged: the CLI is run straight from the bundle (cli_path); never download.
         if not cli_available():
             QMessageBox.warning(None, "BuddyRemote", t("cli_bundled_missing"))
     elif not cli_available():

@@ -3,7 +3,27 @@
 All notable changes to BuddyRemote are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versions are plain numbers (`1.0`, `1.2`, `1.3`); there was no 1.1 release.
+Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 release.
+
+## [Unreleased] - 1.3.1 (draft)
+
+A maintenance release: no new features, no changes to pairing, wake or shut down.
+
+### Changed
+
+- **AppImage: the MoonDeck CLI runs straight from the AppImage.** It is no longer copied to `~/.config/BuddyRemote/cli/`. Every AppImage therefore uses exactly the CLI it was built and checked with. The CLI starts in `~/.config/BuddyRemote/` and gets your own `LD_LIBRARY_PATH` back (like `ping` already did), not the AppImage's internal libraries. A `cli/` folder left there by 1.3 is no longer used; BuddyRemote leaves it alone and you can delete it.
+- **Options → MoonDeck CLI** reads the version info only from the AppImage.
+- **Default settings file.** The shipped first-start defaults are now `packaging/default-config.json`. Your own `config.json` (and `cli/`, `.attributed`, `.instance.lock`, the log and `window.ini`) is no longer part of the repository and is ignored by git. Running from source, `config.json` is created from the defaults on first start.
+- **Language "automatic"** is decided in one place for the start and the Options dialog (same behaviour as before).
+
+### Removed
+
+- Leftovers from the 1.3 development: the unused compact mode, the old status-update path, unused helpers and translation strings (`status`, `unknown`, `online`, `offline`, `error` in all eight languages), and the layout migration steps for draft-only layouts that were never released. Hosts from 1.2 still get a template; 1.3 layouts are kept as they are.
+- Running from source: the old `cli/cli.py` fallback. The CLI binary from the first-start download is used, as before.
+
+### Upgrading from source
+
+- `config.json` is no longer tracked. If you changed it in your checkout, back it up before `git pull` (git refuses to overwrite it otherwise), then put it back.
 
 ## [1.3] - 2026-10-31
 
@@ -164,6 +184,7 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`); there was no 1.1 release.
 
 - First release: a Linux GUI for MoonDeck Buddy with wake, shut down, restart and suspend, pairing with automatic MAC detection, multiple hosts, a tray icon, an automatic MoonDeck CLI download with checksum verification, and optional logging.
 
-[1.3]: https://github.com/deciderino/BuddyRemote/compare/1.2...HEAD
+[Unreleased]: https://github.com/deciderino/BuddyRemote/compare/1.3...HEAD
+[1.3]: https://github.com/deciderino/BuddyRemote/compare/1.2...1.3
 [1.2]: https://github.com/deciderino/BuddyRemote/compare/1.0...1.2
 [1.0]: https://github.com/deciderino/BuddyRemote/releases/tag/1.0
