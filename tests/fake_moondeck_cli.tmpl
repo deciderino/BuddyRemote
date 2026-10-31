@@ -1,0 +1,33 @@
+#!/usr/bin/env python3
+"""Fake MoonDeck CLI for tests/test_pairing_cli.py. Speaks Buddy API @API@; markers in @DIR@.
+A file "buddy_api" in @DIR@ sets the API of the (mock) Buddy it talks to."""
+import json, os, signal, sys, time
+D, API, DELAY = "@DIR@", @API@, @DELAY@
+args = sys.argv[1:]
+def mark(name, text=""):
+    with open(os.path.join(D, name), "a") as fh:
+        fh.write(text + "\n")
+if "--help" in args:
+    print("usage: moondeck-cli [-h] ..."); sys.exit(0)
+cfg = args[args.index("--config-file") + 1] if "--config-file" in args else ""
+rest = [a for a in args if a not in ("--config-file", cfg)]
+mark("calls", " ".join(rest))
+buddy_api = int(open(os.path.join(D, "buddy_api")).read()) if os.path.exists(os.path.join(D, "buddy_api")) else API
+if rest[:2] == ["steam", "status"]:
+    if buddy_api != API:
+        print("MoonDeck/Buddy needs update!"); sys.exit(1)
+    print(json.dumps({"status": {"running": True, "bpm": False}})); sys.exit(0)
+if rest[:2] == ["host", "pair"]:
+    mark("pair.pid", str(os.getpid()))
+    mark("pair.cfg", cfg)
+    def on_int(*_):
+        mark("aborted", "SIGINT -> abort_pairing"); sys.exit(1)
+    signal.signal(signal.SIGINT, on_int)
+    end = time.time() + DELAY
+    while time.time() < end:
+        time.sleep(0.05)
+    mark("late_done", "pairing completed after %ss (PIN entered late)" % DELAY)
+    print("Pairing has been completed."); sys.exit(0)
+if rest[:2] == ["host", "list"]:
+    print(json.dumps([{"mac": "00:00:5E:00:53:01"}])); sys.exit(0)
+sys.exit(0)
