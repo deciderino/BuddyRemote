@@ -44,7 +44,7 @@ class CAStoreTests(unittest.TestCase):
         return path
 
     def find(self, env=None):
-        return cacerts.find_ca_store(env or {}, use_cache=False)
+        return cacerts.find_ca_store(env or {}, use_cache=False, platform="linux")
 
     def test_fedora_layout(self):
         """Bazzite / Fedora: only /etc/pki exists, no /etc/ssl/certs."""
@@ -85,14 +85,14 @@ class CAStoreTests(unittest.TestCase):
 
     def test_context_always_verifies(self):
         self.put(self.root + "/etc/pki/tls/certs/ca-bundle.crt")
-        ctx = cacerts.https_context({}, use_cache=False)
+        ctx = cacerts.https_context({}, use_cache=False, platform="linux")
         self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
         self.assertTrue(ctx.check_hostname)
         self.assertGreater(ctx.cert_store_stats()["x509_ca"], 0)
 
     def test_no_store_raises_and_names_paths(self):
         with self.assertRaises(cacerts.NoCAStoreError) as cm:
-            cacerts.https_context({}, use_cache=False)
+            cacerts.https_context({}, use_cache=False, platform="linux")
         msg = str(cm.exception)
         self.assertIn("/etc/pki/tls/certs/ca-bundle.crt", msg)
         self.assertIn("SSL_CERT_FILE", msg)

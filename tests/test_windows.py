@@ -44,8 +44,12 @@ class PathTests(unittest.TestCase):
 class BackendTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import backend
-        cls.b = backend
+        # private copy: other test modules stub functions (e.g. ping_icmp) on the shared
+        # backend module in sys.modules
+        spec = importlib.util.spec_from_file_location(
+            "backend_windows_test", os.path.join(os.path.dirname(__file__), "..", "backend.py"))
+        cls.b = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.b)
 
     def test_preview_version(self):
         b = self.b

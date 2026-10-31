@@ -1343,6 +1343,7 @@ class Release131Tests(UiTestCase):
         boxes.resizeEvent(QResizeEvent(app.QSize(800, 200), boxes.size()))
         self.assertFalse(boxes.stacked())
 
+    @unittest.skipIf(sys.platform == "win32", "the fake CLIs are shell scripts")
     def test_options_cli_bundled_pick_reject_and_back(self):
         dlg = self.dialog()
         self.assertEqual(dlg.custom_cli_view(), "bundled")
