@@ -34,12 +34,13 @@ POSIX = os.name == "posix"
 _DIRS = []
 
 
-def make_cli(api, delay=0.0):
+def make_cli(api, delay=0.0, onefile=False):
     d = tempfile.mkdtemp(prefix="br-fakecli-")
     _DIRS.append(d)
     with open(os.path.join(HERE, "fake_moondeck_cli.tmpl")) as fh:
         src = fh.read()
     src = src.replace("@DIR@", d).replace("@API@", str(api)).replace("@DELAY@", str(delay))
+    src = src.replace("@ONEFILE@", str(bool(onefile)))
     src = src.replace("#!/usr/bin/env python3", "#!" + sys.executable, 1)
     p = os.path.join(d, "moondeck-cli")
     with open(p, "w") as fh:
@@ -161,7 +162,15 @@ class PairCancelTests(Base):
     DELAY = 3.0
 
     def test_cancel_stops_cli(self):
-        cli, d = make_cli(9, delay=self.DELAY)
+        self._cancel_stops_cli(onefile=False)
+
+    def test_cancel_stops_onefile_cli_payload(self):
+        # the bundled CLI is a Nuitka onefile whose bootstrap does not forward SIGINT:
+        # the real CLI process (child) must get it too (process group)
+        self._cancel_stops_cli(onefile=True)
+
+    def _cancel_stops_cli(self, onefile):
+        cli, d = make_cli(9, delay=self.DELAY, onefile=onefile)
         self.be.CLI_BIN = cli
         U.app.check_buddy_api = lambda *a, **k: (True, '{"version": 9}')
         self.w.start_pairing(dict(self.w.cfg["hosts"][0]))
@@ -196,6 +205,23 @@ class PairCancelTests(Base):
         self.be.stop_cli(p, grace=0.5)        # SIGINT ignored -> killed after the grace time
         self.assertLess(time.monotonic() - t0, 2.0)
         self.assertIsNotNone(p.wait(2))
+
+    def test_stop_cli_kills_whole_group_after_grace(self):
+        import subprocess
+        code = ("import signal,subprocess,sys,time; signal.signal(signal.SIGINT, signal.SIG_IGN); "
+                "c = subprocess.Popen([sys.executable, '-c', 'import signal,time; "
+                "signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(30)']); "
+                "print(c.pid, flush=True); time.sleep(30)")
+        p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True,
+                             start_new_session=True)
+        child = int(p.stdout.readline())
+        self.be.stop_cli(p, grace=0.5)
+        self.assertIsNotNone(p.wait(2))
+        p.stdout.close()
+        t0 = time.monotonic()
+        while pid_alive(child) and time.monotonic() - t0 < 2:
+            time.sleep(0.05)
+        self.assertFalse(pid_alive(child), "child of the CLI survives the hard kill")
 
 
 class PrecheckThreadTests(Base):

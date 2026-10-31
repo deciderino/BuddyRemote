@@ -197,17 +197,33 @@ def _exec_cli(cli: Path, args: list, timeout, config_override: Path | None, on_s
         logging.debug("CLI rc=%s", p.returncode)
         return p.returncode, p.stdout, p.stderr
     # cancellable (pairing): the caller gets the process to stop it
+    # POSIX: own process group, so stop_cli reaches the real CLI process too (the bundled
+    # MoonDeck CLI is a Nuitka onefile: its bootstrap does not forward SIGINT to the child)
+    group = {} if sys.platform == "win32" else {"start_new_session": True}
     with subprocess.Popen(cmd, cwd=str(APP_DIR), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          text=True, env=child_env(), **_no_window()) as p:
+                          text=True, env=child_env(), **group, **_no_window()) as p:
         on_start(p)
         try:
             out, err = p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            p.kill()
+            _signal_cli(p, None)
             p.communicate()
             raise
     logging.debug("CLI rc=%s", p.returncode)
     return p.returncode, out, err
+
+def _signal_cli(p, sig):
+    """Send `sig` (None: hard kill) to the CLI and, when it runs in its own process
+    group (POSIX pairing), to the whole group."""
+    import signal
+    sig = signal.SIGKILL if sig is None else sig
+    try:
+        if os.getpgid(p.pid) == p.pid:
+            os.killpg(p.pid, sig)
+            return
+    except OSError:
+        pass
+    p.send_signal(sig)
 
 def stop_cli(p, grace: float = 3.0):
     """Stop a running CLI: SIGINT first (the MoonDeck CLI then cancels its pairing at
@@ -219,10 +235,10 @@ def stop_cli(p, grace: float = 3.0):
             p.terminate()
             return
         import signal
-        p.send_signal(signal.SIGINT)
+        _signal_cli(p, signal.SIGINT)
         p.wait(grace)
     except subprocess.TimeoutExpired:
-        p.kill()
+        _signal_cli(p, None)
     except OSError:
         pass
 

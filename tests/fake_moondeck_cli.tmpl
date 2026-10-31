@@ -2,8 +2,20 @@
 """Fake MoonDeck CLI for tests/test_pairing_cli.py. Speaks Buddy API @API@; markers in @DIR@.
 A file "buddy_api" in @DIR@ sets the API of the (mock) Buddy it talks to."""
 import json, os, signal, sys, time
-D, API, DELAY = "@DIR@", @API@, @DELAY@
+D, API, DELAY, ONEFILE = "@DIR@", @API@, @DELAY@, @ONEFILE@
 args = sys.argv[1:]
+if ONEFILE and not os.environ.get("FAKE_CLI_CHILD"):
+    # like the Nuitka onefile bootstrap of the real CLI: runs the payload as a child and
+    # does not forward SIGINT to it
+    import subprocess
+    signal.signal(signal.SIGINT, lambda *_: None)
+    c = subprocess.Popen([sys.executable, __file__] + args, env=dict(os.environ, FAKE_CLI_CHILD="1"))
+    while c.poll() is None:
+        try:
+            c.wait()
+        except InterruptedError:
+            pass
+    sys.exit(c.returncode)
 def mark(name, text=""):
     with open(os.path.join(D, name), "a") as fh:
         fh.write(text + "\n")
