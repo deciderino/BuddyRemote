@@ -11,14 +11,12 @@ import sys
 import subprocess
 import threading
 import time
-import socket
 import uuid
 import logging
 import random
 import urllib.request
 import hashlib
 import shutil
-import re
 from pathlib import Path
 
 # Set process name so system monitor / KDE show "BuddyRemote" instead of python/app.py
@@ -46,7 +44,7 @@ from PyQt6.QtCore import (Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QL
                           QRectF, QPointF, QPoint, QRect, QSize, QVariantAnimation, QEasingCurve,
                           QPropertyAnimation)
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
-from PyQt6.QtGui import QIcon, QAction, QActionGroup, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices, QFont, QInputDevice, QContextMenuEvent, QPainterPath
+from PyQt6.QtGui import QIcon, QActionGroup, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices, QFont, QInputDevice, QContextMenuEvent, QPainterPath
 
 APP_VERSION = "1.3"
 
@@ -594,13 +592,6 @@ def run_cli(args: list, timeout=90, config_override: Path | None = None) -> tupl
         logging.exception("CLI error")
         return -1, "", str(e)
 
-def ping_host(ip: str, port: int = 59999, timeout=2.0) -> bool:
-    try:
-        with socket.create_connection((ip, port), timeout=timeout):
-            return True
-    except Exception:
-        return False
-
 _ping_warned = False
 
 def ping_icmp(ip: str, timeout_s: int = 1) -> bool:
@@ -892,7 +883,6 @@ StartupWMClass=BuddyRemote
 
 # ---------------------------------------------------------------------------
 class Signals(QObject):
-    status_update = pyqtSignal(str, str)  # host_id, status_text
     host_status = pyqtSignal(str, dict)   # host_id, result of MainWindow._check_host
     update_result = pyqtSignal(dict)      # result of MainWindow.check_for_updates
     action_started = pyqtSignal(str, str, str)  # host_id, name, action
@@ -1132,7 +1122,6 @@ class HostRow(QFrame):
         indent = self.dot.width() + top.spacing()
         if self.grip_lbl is not None:
             indent += self.grip_lbl.width() + top.spacing()
-        self._indent = indent
 
         # problem line (only "PC on, Buddy silent"): quiet, never blinks
         self.hint_row = QWidget()
@@ -1173,7 +1162,6 @@ class HostRow(QFrame):
         self.steam_btns = []        # the Steam toggle (and its duplicates)
         self.action_buttons = []    # (action, button); action "wake", "shutdown", …, "steam"
         self._tiles = []            # (widget, tile dict) of the shown tiles
-        self._edit_col_min = 0
         self.grid = QGridLayout()
         self.grid.setContentsMargins(indent, 2, 0, 0)
         self.grid.setSpacing(self.SPACING)
@@ -1368,7 +1356,6 @@ class HostRow(QFrame):
         self.ensurePolished()
         if self.editing:
             col_min = self._edit_col_need()
-            self._edit_col_min = col_min
             if self.editor is not None:
                 self.editor.setMinimumWidth(tiles.COLS * col_min + (tiles.COLS - 1) * self.SPACING)
             for c in range(tiles.COLS):
@@ -2451,14 +2438,6 @@ class TilePreview(QWidget):
             self._show(d["new"])        # others reflow (or go back while invalid)
         self.update()
 
-    def drag_state(self) -> dict | None:
-        """For tests: what a drop right now would do."""
-        d = self._drag
-        if not d:
-            return None
-        return {"key": d["key"], "pos": list(d["pos"]), "valid": d["valid"], "inside": d["inside"],
-                "result": d["result"], "new": d["new"]}
-
     def drop_slots(self) -> list:
         """While dragging: the places the tile could go without pushing anything aside
         (the original place first, then free ones in reading order, never overlapping
@@ -2740,7 +2719,7 @@ class HostDialog(QDialog):
                 self.tpl_combo.addItem(t(f"tpl_{name}"), name)
             self.tpl_combo.setCurrentIndex(tiles.TEMPLATE_ORDER.index(tiles.DEFAULT_TEMPLATE))
             self.tpl_combo.setToolTip(t("tip_template"))
-            self.tpl_combo.currentIndexChanged.connect(lambda _: self._apply_template(quiet=True))
+            self.tpl_combo.currentIndexChanged.connect(lambda _: self._apply_template())
             layout.addRow(t("tiles_template"), self.tpl_combo)
             side = QVBoxLayout()
             side.setSpacing(6)
@@ -2785,7 +2764,7 @@ class HostDialog(QDialog):
         install_dialog_nav(self)
         fit_dialog_to_screen(self)
 
-    def _apply_template(self, quiet: bool = True):
+    def _apply_template(self):
         """Adding: the chosen template replaces the preview (nothing to undo yet)."""
         self._tiles = tiles.apply_template(self._tiles, self.tpl_combo.currentData())
         self._sync()
@@ -2812,7 +2791,6 @@ class HostDialog(QDialog):
         cancel = box.addButton(t("cancel"), QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(cancel)        # Enter / A on the controller never deletes by accident
         box.setEscapeButton(cancel)
-        self._delete_box = box              # for tests
         box.exec()
         if box.clickedButton() is delete:
             self.done(self.DELETE)
@@ -3682,7 +3660,6 @@ class _ReorderDrag(QObject):
         self._p = None          # pending press: dict(src, gpos, touch)
         self.drag = None        # dict while dragging
         self._anim = None
-        self.last_index = None  # tests: drop index of the last drag
 
     def watch(self, w):
         w.installEventFilter(self)
@@ -3871,7 +3848,6 @@ class _ReorderDrag(QObject):
                 self.outside(src)
             self._land(d, self._rect(src).topLeft())
             return
-        self.last_index = d["index"]
         self.commit(src, d["index"])
         try:
             c = self.container()
@@ -4149,7 +4125,6 @@ class MainWindow(QMainWindow):
         self.cfg = load_config()
         setup_logging(self.cfg["settings"].get("logging", False))
         self.signals = Signals()
-        self.signals.status_update.connect(self.on_status_update)
         self.signals.host_status.connect(self.on_host_status)
         self.signals.update_result.connect(self.on_update_result)
         self._pending_update: dict | None = None   # found while the window was hidden
@@ -5326,9 +5301,6 @@ class MainWindow(QMainWindow):
             self.check_hosts(removed["id"])
         self.show_toast(t("host_deleted", name=name), kind="info", action=(t("undo"), undo), ms=8000)
 
-    def move_host(self, host: dict, direction: int):
-        self.move_card(host.get("id"), direction)
-
     # --- UI only: card order (edit mode: drag and drop, Ctrl+Up/Down) ----------
     def _host_order(self) -> list:
         return [h.get("id") for h in self.cfg.get("hosts", [])]
@@ -5661,9 +5633,6 @@ class MainWindow(QMainWindow):
         if self.tb_grip.hasFocus() or QApplication.focusWidget() is None:
             self.tb_btns[self._tb_items[0]["id"]].setFocus(Qt.FocusReason.OtherFocusReason)
 
-    def toggle_toolbar(self):
-        self.set_toolbar_collapsed(not self._tb_collapsed)
-
     # --- UI only: log height (splitter) --------------------------------------------
     LOG_DEFAULT = 150
     LOG_MIN = 60
@@ -5958,14 +5927,6 @@ class MainWindow(QMainWindow):
         self._update_tray_icon(any(s.get("buddy") for s in self.host_state.values()))
         if not self._checking:
             self.log_output("Status check complete")
-
-    def on_status_update(self, hid: str, status: str):
-        if hid == "__log__":
-            self.log_output(status)
-            return
-        if hid == "__tray__":
-            self._update_tray_icon(status == "online")
-            return
 
     def on_action_started(self, hid: str, title: str, action: str):
         self.log_output(f"Running {action} on {title}...")

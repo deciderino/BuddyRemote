@@ -393,17 +393,6 @@ class ReflowTests(unittest.TestCase):
                     ts = tiles.pack_rows(new)
 
 
-def no_overlap(ts):
-    seen = set()
-    for a in ts:
-        if tiles.is_active(a):
-            c = tiles.cells(a["pos"], a["groesse"])
-            if c & seen or not tiles.fits(a["pos"], a["groesse"]):
-                return False
-            seen |= c
-    return True
-
-
 class DuplicateRemoveTests(unittest.TestCase):
     def test_duplicate_action(self):
         ts = old("standard")
