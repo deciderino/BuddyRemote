@@ -64,6 +64,10 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(b.is_newer_version("1.4.1", "1.4-preview"))
         self.assertFalse(b.is_newer_version("1.4-preview", "1.4"), "a preview is never newer than its final")
         self.assertFalse(b.is_newer_version("1.4-beta", "1.4-preview"), "equal numbers, both pre-releases")
+        self.assertTrue(b.is_prerelease("1.4-preview2"))
+        # (1.3.1 never sees 1.4-preview2: it is a GitHub pre-release, releases/latest skips it)
+        self.assertTrue(b.is_newer_version("1.4", "1.4-preview2"), "final release replaces preview2")
+        self.assertFalse(b.is_newer_version("1.3.1", "1.4-preview2"))
         # unchanged 1.3.1 behaviour
         self.assertTrue(b.is_newer_version("1.3.2", "1.3.1"))
         self.assertFalse(b.is_newer_version("1.3.1", "1.3.1"))

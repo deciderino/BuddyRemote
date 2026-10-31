@@ -7,6 +7,15 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 
 ## [Unreleased]
 
+### Fixed (1.4-preview2)
+
+- **Touch: moving tiles in edit mode.** Holding a tile no longer breaks off at the slightest finger wobble (the allowed movement during the hold went from 12 to 32 px, about 4 mm on the Steam Deck screen). The edit hint now says how it works: "Press and hold, then drag to move anything with ⠿ · tap to edit" (all 8 languages).
+- **Controller: leaving the tile editor.** LB/RB jump to the previous/next row, so a controller reaches the other cards and the edit bar again (in dialogs LB/RB act as Shift+Tab/Tab). The D-pad keeps moving tiles. While a controller is in use the edit bar shows "Controller: LB/RB switch row/card · D-pad moves · B exits".
+- **Controller: collapsed control bar.** After collapsing, focus moves to the grip, so the bar can be shown again with the controller (and the next press no longer lands on the first card's Wake). Expanding moves focus back to the first button.
+- **Custom MoonDeck CLI: no false "Buddy needs update".** With a working custom CLI the Buddy API is no longer compared with the bundled CLI's API; only the custom CLI's own "needs update" counts, and the details no longer name the bundled API. A broken custom CLI still falls back to the bundled one, with its check.
+- **Pairing: Cancel really cancels.** Cancel stops the MoonDeck CLI (Linux: SIGINT, so it aborts the pairing at Buddy; killed after 3 s if needed; Windows: terminated). No "pairing failed" message, no late completion, no MAC lookup, the temporary CLI config is removed.
+- **Pairing: no frozen window.** The Buddy check before pairing runs in the background; the window stays responsive while an unreachable host (e.g. 192.0.2.10, "Gaming PC") times out.
+
 ### Added
 
 - **Windows preview (1.4-preview).** BuddyRemote runs on Windows 10/11 x64 as a ZIP with a folder you unpack (`BuddyRemote\BuddyRemote.exe`); the MoonDeck CLI (`moondeck-cli.exe`) is bundled. Settings live in `%APPDATA%\BuddyRemote`; "Start with the system" uses the per-user Run key; HTTPS checks use the Windows certificate store. The update check only offers releases that ship a Windows ZIP. Linux behaviour is unchanged.
