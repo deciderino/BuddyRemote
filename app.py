@@ -55,15 +55,6 @@ from gamepad import InputModeController, GamepadBridge
 from dialogs import install_dialog_nav, fit_dialog_to_screen, notify, OptionsDialog, DownloadDialog
 
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 class Signals(QObject):
     host_status = pyqtSignal(str, dict)   # host_id, result of MainWindow._check_host
     update_result = pyqtSignal(dict)      # result of MainWindow.check_for_updates
@@ -1979,11 +1970,6 @@ class HostDialog(QDialog):
             data["aktionen"] = tiles.copy_tiles(self._tiles)
             data["layout_rev"] = tiles.LAYOUT_REV
         return data
-
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # UI only: destructive confirmations default to "No" (controller/Enter safety)
