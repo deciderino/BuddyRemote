@@ -7,7 +7,13 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 
 ## [Unreleased] - 1.3.1 (draft)
 
-A maintenance release: no new features, no changes to pairing, wake or shut down.
+A maintenance release with two small additions; no changes to pairing, wake or shut down.
+
+### Added
+
+- **Use a custom MoonDeck CLI (Options → Files).** The bundled CLI stays the default. "Choose custom CLI …" checks the file right away (it must start and report a version); a file that does not start is rejected and nothing changes. "Back to the bundled CLI" switches back. If the custom CLI later fails to start or is gone, BuddyRemote falls back to the bundled one, shows an amber note with a **Settings** button and keeps your choice; the status bar then shows "Custom CLI ⚠". Works in the AppImage and from source.
+- **Options → Updates shows BuddyRemote and the MoonDeck CLI side by side** (one below the other in a narrow window), with one "Check now" button, "Last checked" and the states "checking …" and "check failed". The CLI check is part of the existing update check: it compares the MoonDeck nightly with the bundled CLI and only shows a note with a **Release page** button – nothing is downloaded (a newer CLI comes with the next BuddyRemote update). The automatic note appears once per new nightly. If the app and the CLI are both newer, you get one combined note. With a custom CLI active the check still refers to the bundled CLI.
+- **Buddy version mismatch warning.** BuddyRemote reads the Buddy API version (`/apiVersion`, expected: 9) and also recognises the CLI's "MoonDeck/Buddy needs update!". On a mismatch the host gets an orange dot, a hint line with "ⓘ Details" that says which side needs updating (Buddy on the host is older → update Buddy; Buddy is newer → update BuddyRemote), and only **Start Steam** is disabled (with a tooltip). Wake, shut down, restart, standby and hibernate keep working. No blinking, no pop-ups.
 
 ### Changed
 
