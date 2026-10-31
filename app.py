@@ -48,7 +48,7 @@ from PyQt6.QtCore import (Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QL
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtGui import QIcon, QAction, QActionGroup, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QKeyEvent, QCursor, QIntValidator, QDesktopServices, QFont, QInputDevice, QContextMenuEvent, QPainterPath
 
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 
 # ---------------------------------------------------------------------------
 APP_DIR = Path(__file__).resolve().parent

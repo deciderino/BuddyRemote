@@ -3,9 +3,92 @@
 All notable changes to BuddyRemote are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versions are plain numbers (`1.0`, `1.2`); there was no 1.1 release.
+Versions are plain numbers (`1.0`, `1.2`, `1.3`); there was no 1.1 release.
 
-## [1.2] - Unreleased
+## [1.3] - 2026-10-31
+
+### Highlights
+
+- **A whole new look.** Every PC is a clean card with big tiles. One status dot tells you at a glance: green = ready, orange = on but MoonDeck Buddy isn't answering, grey = off.
+- **Make it yours.** Press ✎ and drag tiles where you want them. The other tiles make room. Resize, duplicate or hide tiles, reorder your PCs, and undo any step. Or just pick a template: Standard, Minimal, Server or Gaming.
+- **As slim as you like.** Collapse the toolbar and the log, hide IP addresses and the Steam status, and BuddyRemote fits in a tiny window.
+- **You see what happens.** A tile says "Waking …" until the PC is up, then a short toast confirms it.
+- **Works on more Linux systems.** The update check in the AppImage now works on Fedora, Bazzite, openSUSE and others.
+- **Eight languages.** Spanish, French, Italian, Czech, Japanese and Korean join German and English.
+- **Your setup is kept.** Hosts and pairings from 1.2 are migrated automatically.
+
+
+### Added
+
+- **Tiles per host.** Each host card is a 4-column grid of tiles: online status, Wake, Shut down, Restart, Standby, Hibernate and Steam start/close. Tiles come in four fixed sizes: small 1×1, medium 2×1, wide 4×1 and large 2×2. New positions are checked for collisions.
+- **Edit mode in the main window.** "Edit" in the toolbar (Ctrl+E) or a touch long press (~350 ms) on a tile switches all cards into edit mode. The ✎ button in the toolbar turns into a coloured "✓ Done" (the only Done button; Esc also leaves), a hint bar with undo/redo appears, and the status bar says "Edit mode active". Tiles are dragged directly on the cards. A click selects a tile, the arrow keys move it, and a blocked move is reported. A slim edit toolbar (size, duplicate, hide, show hidden, template, layout ▾ incl. auto-arrange) is only visible in edit mode. Every change is saved at once.
+- **Templates:** Standard, Minimal, Server (without Steam) and Gaming. You can pick one when adding a host or apply it later. Templates hide tiles; they never delete them.
+- **Undo** after deleting a host, via a button in the toast (8 s).
+- **Drag and drop** in edit mode: tiles snap to the grid cells, other tiles make room with a short animation (160 ms, OutBack) and a placeholder shows the target. A ghost follows the pointer and the target cells light up in the accent colour, or red if the drop is not possible; an invalid drop springs back. Touch: press and hold (~350 ms), drag, release. Esc cancels a running drag. The arrow keys are the alternative to dragging.
+- **Right-click menu** on a tile in edit mode: size, duplicate, hide. Everything in it is also reachable without right click, through the edit toolbar.
+- **Duplicates:** an action can be on a card up to 3 extra times. "Remove" deletes a duplicate and hides an original tile.
+- **Undo/redo for the layout** (Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z and 48 × 48 px buttons in the hint bar): move, resize, show/hide, template, layout, auto-arrange, duplicate, remove. The history covers one edit session; "Done" ends it.
+- **Layouts "Compact" and "Spacious"** (sizes and arrangement; which tiles are visible stays up to the template) and **auto-arrange by usage** per host (falls back to the default order without usage data).
+- **Calm status in the card header.** One dot next to the name: green = ready, orange (#fb8c00, light theme #f57c00) = PC on but MoonDeck Buddy not answering, grey = off. The tooltip on the dot and the name shows ping, Buddy port and the time of the last check. Only in the problem state a line "Buddy not answering · ⓘ Details" appears; "▶ Steam running" is only shown while Steam runs. Automatic status checks (`auto_status`) work as before.
+- **Reorder cards by drag and drop** in edit mode: grab a card by its header or an empty area (touch: hold ~350 ms), a ghost follows, an insertion line shows the target, the card slides into place and the order is saved. Ctrl+↑/↓ moves the focused card. Undo/redo covers it.
+- **Resizable log.** The log is separated by a splitter with a 14 px touch-friendly handle instead of a fixed 150 px height. The height is saved in `window.ini` (`log_height`); double-click on the handle resets it. Works at every window size.
+- **Collapsible main toolbar.** The toolbar shows icon-only 48 px buttons ＋ ⟳ ✎ ☰; the tooltips give label and shortcut. ⌃ at the right collapses it with a short slide animation into a slim full-width grip ⌄ that expands it again. The state is saved (`toolbar_collapsed`). Shortcuts (Ctrl+N, F5, Ctrl+E, …) work while collapsed, and edit mode expands the bar automatically (and collapses it again afterwards).
+- **"App controls" group in edit mode:** the toolbar buttons can be resized (small = icon, medium = icon + label), reordered by drag or Ctrl+←/→ and undone/redone. They cannot be hidden or removed (the app would become unusable): this is shown disabled in the right-click menu and the edit bar, and Delete shows a toast.
+- **Third-party licenses viewer** in Settings (Qt, PyQt6, ICU, SDL2, MoonDeck CLI …); About shows the version and the MoonDeck thanks with a link.
+- **Languages:** Spanish, French, Italian, Czech, Japanese and Korean in addition to German and English (machine translations, review by native speakers pending). The language list in Settings shows each language by its own name.
+
+- **Edit mode, concept 2.** Everything that can be moved (tiles, cards, the app-control icons including "✓ Done") has the same ⠿ grip and a calm lifted look (shadow, no animation). What cannot be edited in edit mode (IP, log, status bar, the collapse arrow) is dimmed to 40 %. Section labels "App controls · drag to arrange" and "Tiles · drag to arrange". While dragging, only valid drop areas light up: a tile shows its slots ("drop here" / "original place"), a toolbar icon opens a gap with a marker, a card opens a gap with an insertion line. The hint text follows the state (idle, tile selected, dragging a tile / icon / card). The card grip has a tooltip.
+- **"Show IP address"** switch in Settings (global). When off, the IP is only in the tooltip of the status dot.
+- **"Show 'Steam running'"** switch in Settings (global) for "▶ Steam running" in the card header.
+- **"📂 Open data folder"** in Settings opens the folder with config.json, the log, window.ini and cli/ in the system file manager (QDesktopServices, platform neutral). The path is shown next to it and can be selected; if opening fails, the dialog itself says so below the button ("⚠ Could not open the data folder" with the hint to copy the path) and the path turns red, so nothing is hidden behind the dialog.
+- **Empty start:** without hosts, a large "＋ Add first host" tile in the middle of the window.
+- **Action feedback in the tile:** after a click the tile says e.g. "Waking …" until the status changes (at most 90 s; without automatic status checks until the action returns), then a toast "{Host}: {Action} sent". Failures end the feedback at once and show an error toast.
+
+### Changed
+
+- **Card buttons:** ✎ became ⚙ and opens the connection settings only (name, IP, MAC, Buddy port, delete). The tile preview and arrow buttons are gone from the dialog. The ↑ ↓ buttons for the host order are gone (cards are reordered by drag and drop, see Added), so ⚙ is the only button on the card; its glyph is larger, the button stays 48 × 48 px. The settings button in the toolbar is now ☰. Adding a host still lets you choose a template.
+- **Status tiles hidden by migration.** Existing layouts are migrated once (`layout_rev` 2): the online and Steam status tiles are hidden, the remaining tiles keep their positions, and a status row that becomes empty is removed. The online status tile stays available as an optional tile ("Show hidden"); the Steam status tile was removed later (see below). Templates no longer contain them visibly.
+- **Deleting a host** moved from the ✕ on the card into the ⚙ dialog ("Delete host…"). It asks for confirmation with a red button, and Cancel is the default.
+- The config gets an `aktionen` list per host. 1.2 configs are migrated automatically to the Standard template. No automatic backup copy is written any more. Tile types BuddyRemote doesn't know are kept unchanged; tile entries that are no object at all (hand-edited config) are dropped on load.
+- **Edit hint wraps** instead of being cut off at narrow widths.
+- **Wake is no longer highlighted when the PC answers.** It is greyed out with the reason "PC is already on" as tooltip; highlighted only when the PC is off.
+- **Fewer tooltips.** Kept: toolbar, ⚙, status dot/name, undo/redo, Done, log, licenses and the reasons on disabled buttons. Removed: action tiles, ⓘ Details, check time, edit-bar tool buttons, drag hints and the edit hint. The "duplicate limit reached" note is now a toast.
+- **Removed the automatic config backup** (`config.1.2-backup.json`); the 1.2 migration itself is unchanged.
+- The two-line compact mode of the card was removed; the grid replaces it.
+- The status bar shows only the state: Ready, Action running …, Editing.
+- Info messages appear as toasts; dialogs are only used for confirmations.
+- All remaining hard-coded UI texts (CLI checksum rows, pairing wait dialog, theme names) are translated.
+- The config gets `nutzung` (usage counts) per host, and tiles can carry a `dup` index. The host entry also gets `layout_rev`. 1.2 ignores all three, so going back to 1.2 drops duplicates and usage counts.
+
+- **Steam status tile removed** (not optional any more). Existing layouts lose it on load (`REMOVED_TYPES`); rows that become empty only because of that are removed. "▶ Steam running" in the card header replaces it.
+- **Log grip** sits directly on the top edge of the log and is only there while the log is open; "▸ Log (Ctrl+L)" is on the left of the same 48 px row.
+- **Settings in sections:** Display / Behaviour / Updates / Files.
+- **Consistent wording** in all 8 languages: "Edit" throughout (status bar "Editing"), "Delete" only for permanent things, "Hide" for tiles, "Wake" everywhere, short "Buddy", one success pattern "{Host}: {Action} sent", template "Custom", typographic quotes, unified state texts ("Checking …", "Action running …"). Unused language keys were removed (each checked by grep).
+
+### Fixed
+
+- **Layouts with gaps are saved exactly.** Before, completely empty rows (between tiles or above them) were packed away when saving, so tiles moved up after OK or a restart. Positions are now saved as arranged. On the card, empty rows keep the height of one tile, and the template name only matches when the positions match exactly.
+- **Light theme: dropdowns, context menus and tooltips are readable.** With a dark Plasma colour scheme, combo box entries were dark on dark, because popups used the desktop palette. The app now sets a full palette (all roles, including disabled) and explicit popup, menu and tooltip styles for both themes. Hover and selection in combo popups are highlighted, and disabled entries are greyed out.
+- **Update check in the AppImage on Fedora, Bazzite, openSUSE and others:** fixes the certificate error "unable to get local issuer certificate". The bundled OpenSSL only searched Debian paths. The system CA store is now found explicitly:
+  - `SSL_CERT_FILE` / `SSL_CERT_DIR` first.
+  - Then `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`, `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`, `/etc/ssl/ca-bundle.pem`, `/var/lib/ca-certificates/ca-bundle.pem`.
+  - Then hashed certificate directories.
+
+  Verification always stays on and no CA list is bundled. The same applies to the CLI checksum check. MoonDeck Buddy's self-signed connection is unchanged.
+- The update check failure toast is shorter and clearer ("No connection or certificate problem"), or says that no system certificate store was found. The cause and the CA store in use are written to the log.
+- **"✓ Done" keeps its accent colour** after it is moved in the app controls (the "selected" style no longer overrides it).
+- Entering edit mode no longer briefly creates a stray top-level window (IP pill), which took the focus away from the main window and its shortcuts.
+- Esc now cancels a toolbar-icon or card drag even while the dragged button holds the mouse grab.
+- The edit-mode hint ("… · Esc cancels") stays readable while dragging; the drop-focus dimming no longer covers it.
+- When the cards are rebuilt (for example on leaving edit mode), the old cards disappear at once instead of staying painted until the next event-loop turn. The dragged card's ghost is also less transparent, so its labels no longer mix with the card below.
+- **Hand-edited or damaged config.json no longer crashes the app:** tile entries that are no object are dropped, hosts that are no object are dropped, hosts without a usable `id` get a new one (saved, so it stays stable), and `status_interval` is read as a whole number of seconds within 10–300 (otherwise 30). Connection data (IP, MAC, Buddy port, pairing) is not touched.
+- **"Start minimized" no longer hides the window** when there is no host yet (the empty start with "＋ Add first host" is always shown) or when the desktop has no system tray (the window could not be brought back).
+- **Changing "Show IP address" or "Show 'Steam running'" while an action runs** keeps the tile feedback ("Waking …", busy state, error line) instead of resetting it when the cards are rebuilt.
+- **Settings: the "Open data folder" error is shown in the dialog** instead of a toast that was hidden behind the modal dialog.
+- **Settings: the checkboxes have a 48 px touch target** (were 42 px).
+- **The card grip in edit mode is painted** like the tile and toolbar grips instead of the "⠿" font glyph (looks the same on every platform and font).
+
+## [1.2] - 2026-10-29
 
 ### Added
 
@@ -81,5 +164,6 @@ Versions are plain numbers (`1.0`, `1.2`); there was no 1.1 release.
 
 - First release: a Linux GUI for MoonDeck Buddy with wake, shut down, restart and suspend, pairing with automatic MAC detection, multiple hosts, a tray icon, an automatic MoonDeck CLI download with checksum verification, and optional logging.
 
-[1.2]: https://github.com/deciderino/BuddyRemote/compare/1.0...HEAD
+[1.3]: https://github.com/deciderino/BuddyRemote/compare/1.2...HEAD
+[1.2]: https://github.com/deciderino/BuddyRemote/compare/1.0...1.2
 [1.0]: https://github.com/deciderino/BuddyRemote/releases/tag/1.0
