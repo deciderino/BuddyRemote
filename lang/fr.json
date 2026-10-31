@@ -182,6 +182,7 @@
   "edit_mode": "Modifier",
   "tip_edit_mode": "Modifier (Ctrl+E)",
   "edit_hint": "Maintenez puis faites glisser pour déplacer tout ce qui porte ⠿ · touchez pour modifier",
+  "edit_hint_pad": "Manette : LB/RB change de ligne/carte · la croix déplace · B quitte",
   "edit_done": "Terminé",
   "tip_edit_done": "Terminer la modification (Échap). Toutes les modifications sont déjà enregistrées.",
   "edit_size": "Taille",

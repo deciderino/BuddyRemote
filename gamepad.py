@@ -20,8 +20,8 @@ from paths import RES_DIR
 # navigation, edit mode, dialogs and confirmations handle it unchanged.
 _FIELD_TYPES = (QLineEdit, QAbstractSpinBox, QComboBox)
 _PAD_KEYS = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right,
-             Qt.Key.Key_Return, Qt.Key.Key_Escape)
-_REVEAL_KEYS = _PAD_KEYS + (Qt.Key.Key_Enter, Qt.Key.Key_Tab, Qt.Key.Key_Backtab, Qt.Key.Key_Space)
+             Qt.Key.Key_Return, Qt.Key.Key_Escape, Qt.Key.Key_Tab, Qt.Key.Key_Backtab)
+_REVEAL_KEYS = _PAD_KEYS + (Qt.Key.Key_Enter, Qt.Key.Key_Space)
 _MOUSE_MOVE_PX = 4
 
 
@@ -257,7 +257,8 @@ class SDLGamepadSource(GamepadSource):
         B = sdl2
         self._buttons = {B.SDL_CONTROLLER_BUTTON_A: "a", B.SDL_CONTROLLER_BUTTON_B: "b",
                          B.SDL_CONTROLLER_BUTTON_DPAD_UP: "up", B.SDL_CONTROLLER_BUTTON_DPAD_DOWN: "down",
-                         B.SDL_CONTROLLER_BUTTON_DPAD_LEFT: "left", B.SDL_CONTROLLER_BUTTON_DPAD_RIGHT: "right"}
+                         B.SDL_CONTROLLER_BUTTON_DPAD_LEFT: "left", B.SDL_CONTROLLER_BUTTON_DPAD_RIGHT: "right",
+                         B.SDL_CONTROLLER_BUTTON_LEFTSHOULDER: "lb", B.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: "rb"}
         self._axes = {B.SDL_CONTROLLER_AXIS_LEFTX: "lx", B.SDL_CONTROLLER_AXIS_LEFTY: "ly"}
         return ""
 
@@ -312,7 +313,8 @@ class GamepadBridge(QObject):
     DELAY, REPEAT = 0.35, 0.12          # auto-repeat for held directions
     DEDUPE = 0.08                       # Steam Input double-input window (seconds)
     KEYS = {"up": Qt.Key.Key_Up, "down": Qt.Key.Key_Down, "left": Qt.Key.Key_Left,
-            "right": Qt.Key.Key_Right, "a": Qt.Key.Key_Return, "b": Qt.Key.Key_Escape}
+            "right": Qt.Key.Key_Right, "a": Qt.Key.Key_Return, "b": Qt.Key.Key_Escape,
+            "lb": Qt.Key.Key_Backtab, "rb": Qt.Key.Key_Tab}     # bumpers: main window = nav_jump()
     REPEATING = ("up", "down", "left", "right")
 
     def __init__(self, controller, source=None, clock=time.monotonic):
@@ -438,6 +440,10 @@ class GamepadBridge(QObject):
         self.last_sent[key] = now
         if self.ctl.handle_input(key):
             return "reveal"
+        if (name in ("lb", "rb") and QApplication.activeWindow() is self.ctl.win
+                and QApplication.activePopupWidget() is None
+                and self.ctl.win.nav_jump(-1 if name == "lb" else 1)):
+            return "sent"               # main window: row up/down, also out of a tile editor
         target = QApplication.activePopupWidget() or QApplication.focusWidget() or QApplication.activeWindow()
         QApplication.postEvent(target, QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
         QApplication.postEvent(target, QKeyEvent(QEvent.Type.KeyRelease, key, Qt.KeyboardModifier.NoModifier))

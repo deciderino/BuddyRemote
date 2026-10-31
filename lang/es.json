@@ -182,6 +182,7 @@
   "edit_mode": "Editar",
   "tip_edit_mode": "Editar (Ctrl+E)",
   "edit_hint": "Mantén pulsado y arrastra para mover todo lo que tiene ⠿ · toca para editar",
+  "edit_hint_pad": "Mando: LB/RB cambia de fila/tarjeta · la cruceta mueve · B sale",
   "edit_done": "Listo",
   "tip_edit_done": "Terminar la edición (Esc). Todos los cambios ya están guardados.",
   "edit_size": "Tamaño",

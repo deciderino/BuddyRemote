@@ -182,6 +182,7 @@
   "edit_mode": "Upravit",
   "tip_edit_mode": "Upravit (Ctrl+E)",
   "edit_hint": "Podržením a tažením přesunete vše s ⠿ · klepnutím upravíte",
+  "edit_hint_pad": "Ovladač: LB/RB přepíná řádek/kartu · křížový ovladač přesouvá · B ukončí",
   "edit_done": "Hotovo",
   "tip_edit_done": "Ukončit úpravy (Esc). Všechny změny jsou už uložené.",
   "edit_size": "Velikost",

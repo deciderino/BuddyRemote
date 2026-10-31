@@ -3398,6 +3398,11 @@ class MainWindow(QMainWindow):
         self._apply_edit_bar_theme()
         self._sync_edit_bar()
 
+    def _pad_nav(self) -> bool:
+        """Controller connected and the focus ring is shown (not in mouse/touch mode)."""
+        im, pad = getattr(self, "input_mode", None), getattr(self, "gamepad", None)
+        return bool(im is not None and im.nav_visible and pad is not None and pad.devices)
+
     def _sync_edit_bar(self):
         if not self._edit_mode:
             return
@@ -3419,6 +3424,8 @@ class MainWindow(QMainWindow):
             hint = msg
         elif on or tb_sel:
             hint = t("edit_hint_selected")
+        elif self._pad_nav():
+            hint = t("edit_hint_pad")
         else:
             hint = t("edit_hint")
         self.edit_info.setText(hint)
@@ -4776,6 +4783,8 @@ class MainWindow(QMainWindow):
                 r.set_current(visible and new is not None and r.isAncestorOf(new))
             except RuntimeError:
                 pass
+        if old is None and self._edit_mode:    # focus-ring mode switched: touch or controller hint
+            self._sync_edit_bar()
 
     # --- UI only: keyboard/controller navigation -------------------------
     @staticmethod
@@ -4804,6 +4813,19 @@ class MainWindow(QMainWindow):
         grid.append([self.log_btn])
         grid = [[b for b in row if self._navigable(b)] for row in grid]
         return [row for row in grid if row]
+
+    def nav_jump(self, step: int) -> bool:
+        """Controller LB/RB: focus the previous/next row of the arrow-key grid. The only
+        way out of a tile editor without Tab (there the D-pad moves tiles)."""
+        fw = QApplication.focusWidget()
+        grid = self._nav_grid()
+        r = next((i for i, row in enumerate(grid) if fw in row), None)
+        if r is None:
+            return False
+        target = grid[max(0, min(len(grid) - 1, r + step))][0]
+        target.setFocus(Qt.FocusReason.TabFocusReason)
+        self.scroll.ensureWidgetVisible(target)
+        return True
 
     def _focus_first(self):
         target = None

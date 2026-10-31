@@ -182,6 +182,7 @@
   "edit_mode": "Modifica",
   "tip_edit_mode": "Modifica (Ctrl+E)",
   "edit_hint": "Tieni premuto e trascina per spostare tutto ciò che ha ⠿ · tocca per modificare",
+  "edit_hint_pad": "Controller: LB/RB cambia riga/scheda · la croce direzionale sposta · B esce",
   "edit_done": "Fatto",
   "tip_edit_done": "Termina la modifica (Esc). Tutte le modifiche sono già salvate.",
   "edit_size": "Dimensione",
