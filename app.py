@@ -470,7 +470,7 @@ DEFAULT_CONFIG = {
         "status_interval": 30,
         "auto_status": True,
         "logging": False,
-        "start_minimized": True,
+        "start_minimized": False,
         "language": "auto",
         "autostart": False,
         "confirm_actions": True,
@@ -2969,7 +2969,7 @@ class OptionsDialog(QDialog):
         layout.addRow(self.confirm)
 
         self.start_min = QCheckBox(t("start_min"))
-        self.start_min.setChecked(settings.get("start_minimized", True))
+        self.start_min.setChecked(settings.get("start_minimized", False))
         layout.addRow(self.start_min)
 
         self.autostart = QCheckBox(t("autostart"))
@@ -6414,7 +6414,7 @@ class MainWindow(QMainWindow):
         """"Start minimized" only when the window can be brought back and there is
         something to show: a system tray exists and at least one host is set up (the
         empty start with its "Ersten Host hinzufügen" tile is always visible)."""
-        return (bool(self.cfg["settings"].get("start_minimized", True))
+        return (bool(self.cfg["settings"].get("start_minimized", False))
                 and bool(self.cfg.get("hosts"))
                 and QSystemTrayIcon.isSystemTrayAvailable())
 

@@ -981,6 +981,25 @@ class Review4Tests(UiTestCase):
         w.cfg["settings"]["start_minimized"] = False
         self.assertFalse(w.start_hidden())
 
+    def test_start_minimized_default_off(self):
+        """1.3.1: "Start minimized" is off unless the user turns it on (defaults,
+        seed file, a config without the key, the Options checkbox)."""
+        self.assertIs(app.DEFAULT_CONFIG["settings"]["start_minimized"], False)
+        with open(os.path.join(ROOT, "packaging", "default-config.json"), encoding="utf-8") as fh:
+            self.assertIs(json.load(fh)["settings"]["start_minimized"], False)
+        w = self.w
+        self._tray(True)
+        saved = w.cfg["settings"].pop("start_minimized", None)
+        try:
+            self.assertFalse(w.start_hidden(), "missing key: shown")
+            dlg = app.OptionsDialog(w.cfg["settings"], w)
+            try:
+                self.assertFalse(dlg.start_min.isChecked())
+            finally:
+                dlg.deleteLater()
+        finally:
+            w.cfg["settings"]["start_minimized"] = saved
+
     def test_empty_start_minimized_stays_visible(self):
         cfg = _config()
         cfg["hosts"] = []

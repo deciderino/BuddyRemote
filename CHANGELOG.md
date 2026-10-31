@@ -14,6 +14,7 @@ A maintenance release: no new features, no changes to pairing, wake or shut down
 - **AppImage: the MoonDeck CLI runs straight from the AppImage.** It is no longer copied to `~/.config/BuddyRemote/cli/`. Every AppImage therefore uses exactly the CLI it was built and checked with. The CLI starts in `~/.config/BuddyRemote/` and gets your own `LD_LIBRARY_PATH` back (like `ping` already did), not the AppImage's internal libraries. A `cli/` folder left there by 1.3 is no longer used; BuddyRemote leaves it alone and you can delete it.
 - **Options → MoonDeck CLI** reads the version info only from the AppImage.
 - **Default settings file.** The shipped first-start defaults are now `packaging/default-config.json`. Your own `config.json` (and `cli/`, `.attributed`, `.instance.lock`, the log and `window.ini`) is no longer part of the repository and is ignored by git. Running from source, `config.json` is created from the defaults on first start.
+- **"Start minimized" is off by default** everywhere, also for a settings file without this option (it already was for new installs). Turn it on in Options if you want it.
 - **Language "automatic"** is decided in one place for the start and the Options dialog (same behaviour as before).
 
 ### Removed
