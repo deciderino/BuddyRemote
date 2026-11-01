@@ -48,6 +48,26 @@ class PadStyleTests(unittest.TestCase):
         self.assertEqual(padedit.glyph_text("lbrb", "ps"), "L1/R1")
 
 
+class SteamHardwareTests(unittest.TestCase):
+    """Valve hardware (Steam Controller, Deck) is left to Steam; its virtual pad is not."""
+    def test_ids(self):
+        self.assertTrue(gamepad.is_steam_hardware(0x28de, 0x1102))     # Steam Controller (wired)
+        self.assertTrue(gamepad.is_steam_hardware(0x28de, 0x1142))     # Steam Controller (dongle)
+        self.assertTrue(gamepad.is_steam_hardware(0x28de, 0x1205))     # Steam Deck
+        self.assertFalse(gamepad.is_steam_hardware(0x28de, 0x11ff))    # Steam's virtual pad
+        self.assertFalse(gamepad.is_steam_hardware(0x045e, 0x028e))    # Xbox 360
+        self.assertFalse(gamepad.is_steam_hardware(0x054c, 0x0ce6))    # DualSense
+        self.assertFalse(gamepad.is_steam_hardware(0, 0))              # unknown
+
+    def test_guid(self):
+        g = bytes([0x03, 0, 0x12, 0x34, 0xde, 0x28, 0, 0, 0x05, 0x12, 0, 0, 0x11, 0x01, 0, 0])
+        self.assertEqual(gamepad.ids_from_guid(g), (0x28de, 0x1205))
+        self.assertEqual(gamepad.ids_from_guid(list(g)), (0x28de, 0x1205))
+        self.assertEqual(gamepad.ids_from_guid(bytes(range(1, 17))), (0, 0))   # name-style GUID: no USB ids
+        self.assertEqual(gamepad.ids_from_guid(b"\x01\x02"), (0, 0))
+        self.assertEqual(gamepad.ids_from_guid(None), (0, 0))
+
+
 @unittest.skipUnless(U.HAVE_QT, "PyQt6 not installed")
 class PadEditTests(U.UiTestCase):
     def setUp(self):
@@ -315,6 +335,106 @@ class PadEditTests(U.UiTestCase):
     def test_old_three_field_added_event(self):
         self.pad.q.append(("added", 9, "PS4 Controller")); self.br.tick(); pump(3)
         self.assertEqual(self.br.styles[9], "ps")
+
+    # --- Steam hardware ---------------------------------------------------------
+    def test_steam_controller_never_enters_pad_mode(self):
+        w, br = self.w, self.br
+        w.input_mode.set_pad_active(False); pump(3)
+        self.pad.q.append(("added", 20, "Steam Controller", "xbox", 0x28de, 0x1102)); br.tick(); pump(3)
+        self.assertNotIn(20, br.devices)
+        self.assertIn(20, br.ignored)
+        self.press("left", dev=20); self.press("x", dev=20)
+        self.assertFalse(w.input_mode.pad_active)
+        self.assertIsNone(self.pe.grab)
+        self.assertFalse(w.edit_hints.isVisible())
+        self.pad.q.append(("removed", 20)); br.tick(); pump(3)
+        self.assertNotIn(20, br.ignored)
+
+    def test_steam_virtual_pad_and_other_pads_still_work(self):
+        w, br = self.w, self.br
+        for dev, vid, pid in ((21, 0x28de, 0x11ff), (22, 0x045e, 0x0b12)):
+            w.input_mode.set_pad_active(False); pump(3)
+            self.pad.q.append(("added", dev, "Pad", "xbox", vid, pid)); br.tick(); pump(3)
+            self.assertIn(dev, br.devices)
+            self.press("left", dev=dev)
+            self.assertTrue(w.input_mode.pad_active)
+            self.assertTrue(w.edit_hints.isVisible())
+
+    # --- "Verschieben" in the tile menu -------------------------------------------
+    def menu_texts(self):
+        return [a.text() for a in self.w._menu.actions() if not a.isSeparator()]
+
+    def menu_trigger(self, key):
+        m = self.w._menu
+        act = next(a for a in m.actions() if a.text() == self.t(key))
+        m.hide(); act.trigger(); pump(10)
+
+    def kb(self, key):
+        QTest.keyClick(QApplication.focusWidget(), key); pump(10)
+
+    def test_pad_menu_has_move(self):
+        pe = self.pe
+        self.press("left"); self.press("a"); self.press("a"); self.press("a"); pump(10)
+        self.assertTrue(pe.menu_open())
+        self.assertEqual(self.menu_texts()[:2], [self.t("menu_move_tile"), self.t("menu_move_card")])
+        k = pe.key
+        start = list(self.pos("h0", k))
+        self.menu_trigger("menu_move_tile")
+        self.assertIsNotNone(pe.grab)
+        self.press("down"); self.press("a")                  # A drops like X
+        self.assertIsNone(pe.grab)
+        self.assertNotEqual(start, list(self.pos("h0", k)))
+
+    def test_keyboard_enter_opens_menu_and_moves_a_tile(self):
+        w, pe = self.w, self.pe
+        w.input_mode.set_pad_active(False); pump(3)
+        ed = w.host_rows["h0"].editor
+        self.kb(Qt.Key.Key_Return)                           # nothing selected: first tile
+        k = w._edit_key_of("h0")
+        self.assertEqual(k, ed.order()[0])
+        self.kb(Qt.Key.Key_Return)                           # Enter on the selected tile: menu
+        self.assertTrue(pe.menu_open())
+        self.assertEqual(self.menu_texts()[0], self.t("menu_move_tile"))
+        start = list(self.pos("h0", k))
+        self.menu_trigger("menu_move_tile")
+        self.assertIsNotNone(pe.grab)
+        self.assertFalse(w.input_mode.pad_active)
+        self.assertFalse(w.edit_hints.isVisible())           # no pad hints, a text hint instead
+        self.assertEqual(w._edit_msg[0], self.t("kb_move_hint"))
+        self.kb(Qt.Key.Key_Down)
+        self.kb(Qt.Key.Key_Return)                           # drop
+        self.assertIsNone(pe.grab)
+        self.assertIsNone(ed._drag)
+        self.assertNotEqual(start, list(self.pos("h0", k)))
+        self.assertNotEqual(w._edit_msg[0], self.t("kb_move_hint"))
+        self.assertTrue(w._edit_mode)
+
+    def test_keyboard_moves_a_card_and_escape_cancels(self):
+        w, pe = self.w, self.pe
+        w.input_mode.set_pad_active(False); pump(3)
+        self.kb(Qt.Key.Key_Return); self.kb(Qt.Key.Key_Return)
+        self.menu_trigger("menu_move_card")
+        self.assertTrue(w.card_drag.active)
+        self.kb(Qt.Key.Key_Down); self.kb(Qt.Key.Key_Down)
+        self.kb(Qt.Key.Key_Escape); pump(30)
+        self.assertFalse(w.card_drag.active)
+        self.assertEqual(self.order(), ["h0", "h1", "h2"])
+        self.assertTrue(w._edit_mode)                        # Escape only cancelled the grab
+        self.kb(Qt.Key.Key_Return)
+        self.assertTrue(pe.menu_open())
+        self.menu_trigger("menu_move_card")
+        self.kb(Qt.Key.Key_Down)
+        self.kb(Qt.Key.Key_Return); pump(30)
+        self.assertFalse(w.card_drag.active)
+        self.assertEqual(self.order(), ["h1", "h0", "h2"])
+
+    def test_mouse_menu_has_no_move(self):
+        w = self.w
+        ed = w.host_rows["h0"].editor
+        k = ed.order()[0]
+        w.edit_menu("h0", k, ed.mapToGlobal(ed.tile_center(k))); pump(5)
+        self.assertNotIn(self.t("menu_move_tile"), self.menu_texts())
+        w._menu.hide(); pump(5)
 
     def test_x_outside_edit_mode_does_nothing(self):
         w = self.w

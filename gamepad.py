@@ -27,6 +27,29 @@ _KEY_NAMES = {Qt.Key.Key_Up: "up", Qt.Key.Key_Down: "down", Qt.Key.Key_Left: "le
 _MOUSE_MOVE_PX = 4
 _PAD_OFF_MS = 150       # a real key press ends pad mode only if no pad event follows (Steam Input)
 _PS_NAMES = ("ps3", "ps4", "ps5", "playstation", "dualshock", "dualsense", "sony")
+VALVE_VID = 0x28de                      # Steam Controller, Steam Deck, Steam's virtual pads
+STEAM_VIRTUAL_PID = 0x11ff              # Steam Input's virtual gamepad (games started by Steam)
+
+
+def ids_from_guid(data) -> tuple:
+    """(vendor, product) from an SDL2 joystick GUID (16 bytes: bus, crc, vendor, 0,
+    product, 0, version, ...; little endian). (0, 0) if the GUID carries no USB ids."""
+    try:
+        b = bytes(data)[:16]
+    except (TypeError, ValueError):
+        return 0, 0
+    if len(b) < 12 or b[6:8] != b"\0\0" or b[10:12] != b"\0\0":
+        return 0, 0
+    return b[4] | (b[5] << 8), b[8] | (b[9] << 8)
+
+
+def is_steam_hardware(vid, pid) -> bool:
+    """A real Valve controller (Steam Controller, Steam Deck). With Steam running, Steam
+    owns it and maps it to keyboard keys in the desktop layout, so it must not switch the
+    app into controller mode (double input, X opens Steam's keyboard). Steam's virtual
+    pad (games started by Steam: Game Mode, Deck) is not excluded: it is the only pad
+    the app sees there."""
+    return vid == VALVE_VID and pid != STEAM_VIRTUAL_PID
 
 
 def pad_style(sdl_type=None, name: str = "", ps_types=()) -> str:
@@ -114,12 +137,17 @@ class InputModeController(QObject):
         self._pad_off.stop()
         self.set_pad_active(True)
 
+    def _grabbing(self) -> bool:
+        pe = getattr(self.win, "pad_edit", None)
+        return pe is not None and pe.grab is not None
+
     def _pad_edit_key(self, key) -> bool:
         """Edit mode with a controller: keys Steam Input sends for the pad (or the keyboard
-        while pad mode is on) drive the same card/tile levels as the native buttons."""
+        while pad mode is on) drive the same card/tile levels as the native buttons. A
+        grab started from the tile menu ("Verschieben") takes the keys in any mode."""
         name = _KEY_NAMES.get(key)
         fn = getattr(self.win, "pad_edit_input", None)
-        return bool(name and self.pad_active and fn is not None and fn(name))
+        return bool(name and (self.pad_active or self._grabbing()) and fn is not None and fn(name))
 
     # --- where the ring comes back --------------------------------------
     def _remember(self, w):
@@ -254,6 +282,8 @@ class InputModeController(QObject):
         if et in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick, QEvent.Type.Wheel,
                   QEvent.Type.TouchBegin):
             if ev.spontaneous():
+                if self._grabbing():
+                    self.win.pad_edit.cancel_grab()     # keyboard grab: mouse / touch puts it back
                 self.set_pad_active(False)
                 if self.nav_visible and et != QEvent.Type.TouchBegin:
                     self.set_nav_visible(False)
@@ -267,9 +297,10 @@ class InputModeController(QObject):
 
 class GamepadSource:
     """Abstract gamepad event source. poll() returns a list of normalized events:
-    ("added", dev, name, style) / ("removed", dev) / ("button", dev, name, down) / ("axis", dev, name, value)
-    with button names a, b, x, up, down, left, right, lb, rb and axis names lx, ly (value
-    -1.0 .. 1.0); style is "xbox" or "ps" (button glyphs, see pad_style())."""
+    ("added", dev, name, style, vid, pid) / ("removed", dev) / ("button", dev, name, down) /
+    ("axis", dev, name, value) with button names a, b, x, up, down, left, right, lb, rb and
+    axis names lx, ly (value -1.0 .. 1.0); style is "xbox" or "ps" (button glyphs, see
+    pad_style()); vid/pid are the USB ids (0 if unknown; older sources omit them)."""
 
     def open(self) -> str:
         """Returns "" on success or a reason why gamepads are unavailable."""
@@ -326,6 +357,22 @@ class SDLGamepadSource(GamepadSource):
             ty = None
         return pad_style(ty, name, self._ps_types)
 
+    def _ids(self, c) -> tuple:
+        """USB vendor/product id: SDL_GameControllerGetVendor/Product (SDL >= 2.0.6),
+        else the joystick GUID, else (0, 0) = unknown (treated as a normal pad)."""
+        sdl2 = self.sdl
+        try:
+            vid, pid = int(sdl2.SDL_GameControllerGetVendor(c)), int(sdl2.SDL_GameControllerGetProduct(c))
+            if vid or pid:
+                return vid, pid
+        except Exception:
+            pass
+        try:
+            g = sdl2.SDL_JoystickGetGUID(sdl2.SDL_GameControllerGetJoystick(c))
+            return ids_from_guid(g.data)
+        except Exception:
+            return 0, 0
+
     def poll(self) -> list:
         sdl2 = self.sdl
         if sdl2 is None:
@@ -343,7 +390,7 @@ class SDLGamepadSource(GamepadSource):
                     else:
                         self.pads[iid] = c
                         name = (sdl2.SDL_GameControllerName(c) or b"?").decode(errors="replace")
-                        out.append(("added", iid, name, self._style(c, name)))
+                        out.append(("added", iid, name, self._style(c, name)) + self._ids(c))
             elif t == sdl2.SDL_CONTROLLERDEVICEREMOVED:
                 c = self.pads.pop(ev.cdevice.which, None)
                 if c:
@@ -390,6 +437,7 @@ class GamepadBridge(QObject):
         self.src = source
         self.clock = clock
         self.devices = {}
+        self.ignored = set()            # Steam Controller / Deck hardware (see is_steam_hardware)
         self.styles = {}                # dev -> "xbox" | "ps"
         self.last_dev = None            # the controller used last (its glyphs are shown)
         self.pressed = {}               # (dev, button) -> bool
@@ -462,9 +510,21 @@ class GamepadBridge(QObject):
         for e in events:
             kind, dev = e[0], e[1]
             if kind == "added":
+                vid, pid = (e[4], e[5]) if len(e) > 5 else (0, 0)
+                if is_steam_hardware(vid, pid):
+                    self.ignored.add(dev)
+                    log.info("Gamepad ignored (Steam hardware, Steam maps it to keys): %s [%04x:%04x]",
+                             e[2], vid, pid)
+                    continue
+                self.ignored.discard(dev)
                 self.devices[dev] = e[2]
                 self.styles[dev] = e[3] if len(e) > 3 else pad_style(None, e[2])
-                log.info("Gamepad connected: %s (%s)", e[2], self.styles[dev])
+                log.info("Gamepad connected: %s (%s) [%04x:%04x]", e[2], self.styles[dev], vid, pid)
+            elif dev in self.ignored:
+                if kind == "removed":
+                    self.ignored.discard(dev)
+                    log.info("Ignored gamepad disconnected")
+                continue
             elif kind == "removed":
                 self.devices.pop(dev, None)
                 self.styles.pop(dev, None)

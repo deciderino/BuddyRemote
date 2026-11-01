@@ -6,6 +6,11 @@ menu), X grabs and releases the card or tile at the current level (the others ma
 room exactly as with the mouse), B cancels a grab, closes the menu or goes back one
 level (B on the cards leaves the edit mode).  LB / RB keep jumping between the rows.
 
+"Verschieben" / "Karte verschieben" in the tile menu start the same grab, so moving
+also works with the keyboard alone (arrows move, Enter drops, Escape cancels), e.g. a
+Steam Controller in Steam's desktop layout, which only sends keys (see
+gamepad.is_steam_hardware).
+
 The edit bar shows what the buttons do right now (glyphs of the controller used last:
 A/B/X for Xbox, Switch, Steam Deck and unknown pads, cross/circle/square for
 PlayStation), only while the app is being used with a controller.  Pure UI: nothing
@@ -309,6 +314,8 @@ class PadEdit(QObject):
         g, self.grab = self.grab, None
         if g is None:
             return
+        if self.win._edit_msg[0] == t("kb_move_hint"):
+            self.win.edit_message("")
         if g["kind"] == "card":
             if self.win.card_drag.active:
                 self.win.card_drag.cancel()
@@ -316,6 +323,27 @@ class PadEdit(QObject):
             r = self._row(g["hid"])
             if r is not None and r.editor is not None and r.editor._drag is not None:
                 r.editor.cancel_drag()
+
+    def start_move(self, hid, key=None):
+        """Tile menu "Verschieben" (key) / "Karte verschieben" (key None): the same grab
+        as X, driven by the controller or by the keyboard (arrows, Enter, Escape)."""
+        w = self.win
+        r = self._row(hid)
+        if not w._edit_mode or self.grab is not None or r is None or r.editor is None:
+            return False
+        w._focus_editor(hid)
+        self.hid, self.key = hid, key
+        self.level = 2 if key is not None else 1
+        if key is not None:
+            if tiles.find(r.editor.tiles, key) is None:
+                return False
+            self._grab_tile()
+        else:
+            self._grab_card()
+        if self.grab is not None and not w._pad_nav():
+            w.edit_message(t("kb_move_hint"))
+        w._sync_edit_bar()
+        return self.grab is not None
 
     def _fix_key(self):
         r = self._row()
@@ -338,6 +366,8 @@ class PadEdit(QObject):
                 self._tile_grab_input(name)
             else:
                 self._card_grab_input(name)
+            if self.grab is None and w._edit_msg[0] == t("kb_move_hint"):
+                w.edit_message("")
             w._sync_edit_bar()
             return True
         hid = self.focus_card()
@@ -468,7 +498,7 @@ class PadEdit(QObject):
     def _open_menu(self):
         w = self.win
         ed = self._row().editor
-        w.edit_menu(self.hid, self.key, ed.mapToGlobal(ed.tile_center(self.key)))
+        w.edit_menu(self.hid, self.key, ed.mapToGlobal(ed.tile_center(self.key)), keyboard=True)
         m = getattr(w, "_menu", None)
         if m is not None:
             # first entry highlighted like with the keyboard (setActiveAction() would open
@@ -515,7 +545,7 @@ class PadEdit(QObject):
                 rc = ed.cell_rect(col, row, w_, h_)
                 c = ed.mapTo(self.win.host_widget, rc.center().toPoint())
                 self.win.scroll.ensureVisible(c.x(), c.y(), 0, int(rc.height() / 2) + 12)
-        elif name == "x":
+        elif name in ("x", "a"):                # A / Enter drops too (keyboard)
             self.grab = None
             ed._finish_drag()
         elif name == "b":
@@ -561,7 +591,7 @@ class PadEdit(QObject):
                 ghost.move(ghost.x(), top)
             if box is w.host_widget:
                 w.scroll.ensureVisible(cd._rect(src).center().x(), top + h // 2, 0, h // 2 + 12)
-        elif name == "x":
+        elif name in ("x", "a"):
             self.grab = None
             cd.drop(self._card_point(g["idx"]))     # from the geometry now (the gap may have moved)
             QTimer.singleShot(0, lambda h=g["hid"]: self.win._focus_editor(h))

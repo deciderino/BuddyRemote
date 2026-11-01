@@ -457,7 +457,7 @@ class HostRow(QFrame):
         self.editor.dropped.connect(lambda new, k, res: app.edit_drop(hid, new, k, res))
         self.editor.rejected.connect(lambda k: app.edit_message(t("tile_drop_rejected"), "warn"))
         self.editor.picked.connect(lambda k: app.edit_select(hid, k))
-        self.editor.menu_requested.connect(lambda k, gp: app.edit_menu(hid, k, gp))
+        self.editor.menu_requested.connect(lambda k, gp, kb: app.edit_menu(hid, k, gp, keyboard=kb))
         self.editor.key_action.connect(lambda op: app.edit_key(hid, op))
         self.editor.focused.connect(lambda: app.edit_focus_card(hid))
         self.editor.drag_changed.connect(lambda on: app.edit_drag_state("tile" if on else None, self))
@@ -1383,7 +1383,7 @@ class TilePreview(QWidget):
     dropped = pyqtSignal(list, str, str)     # new tiles, dragged key, "ok" | "reflow"
     rejected = pyqtSignal(str)               # dragged key (drop not allowed, went back)
     picked = pyqtSignal(str)                 # a tile was clicked / tapped (no drag)
-    menu_requested = pyqtSignal(str, QPoint)  # right click on a tile: key, global pos
+    menu_requested = pyqtSignal(str, QPoint, bool)  # tile menu: key, global pos, opened by keyboard
     key_action = pyqtSignal(str)             # card mode: left/right/up/down/remove
     focused = pyqtSignal()                   # card mode: got the keyboard focus
     drag_changed = pyqtSignal(bool)          # a drag started (True) / ended (False)
@@ -1564,13 +1564,12 @@ class TilePreview(QWidget):
             return
         if (ev.reason() == QContextMenuEvent.Reason.Keyboard and self.selected
                 and tiles.find(self.tiles, self.selected) is not None):
-            a = self.tiles[tiles.find(self.tiles, self.selected)]
-            self.menu_requested.emit(self.selected, self.mapToGlobal(self.tile_center(self.selected)))
+            self.menu_requested.emit(self.selected, self.mapToGlobal(self.tile_center(self.selected)), True)
             ev.accept()
             return
         a = self._tile_at(QPointF(ev.pos()))
         if a is not None:
-            self.menu_requested.emit(tiles.key(a), ev.globalPos())
+            self.menu_requested.emit(tiles.key(a), ev.globalPos(), False)
         ev.accept()
 
     def _event(self, ev):
@@ -1681,6 +1680,13 @@ class TilePreview(QWidget):
                     self.key_action.emit(arrows[key])
                 ev.accept()
                 return
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.selected \
+                    and tiles.find(self.tiles, self.selected) is not None:
+                # Enter on the selected tile: its menu (size, Verschieben, ...), like the
+                # second A with a controller; Tab / Space step through the tiles
+                self.menu_requested.emit(self.selected, self.mapToGlobal(self.tile_center(self.selected)), True)
+                ev.accept()
+                return
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
                 self._step(1, wrap=True)
                 ev.accept()
@@ -1690,7 +1696,7 @@ class TilePreview(QWidget):
                 ev.accept()
                 return
             if key == Qt.Key.Key_Menu and self.selected and tiles.find(self.tiles, self.selected) is not None:
-                self.menu_requested.emit(self.selected, self.mapToGlobal(self.tile_center(self.selected)))
+                self.menu_requested.emit(self.selected, self.mapToGlobal(self.tile_center(self.selected)), True)
                 ev.accept()
                 return
         super().keyPressEvent(ev)
@@ -4055,8 +4061,11 @@ class MainWindow(QMainWindow):
         auto.triggered.connect(lambda: self.edit_auto())
         self._popup(menu, self.edit_arr_btn)
 
-    def edit_menu(self, hid, k, gpos):
-        """Right-click / long-press menu on a tile (extra: everything is also in the edit bar)."""
+    def edit_menu(self, hid, k, gpos, keyboard=False):
+        """Menu on a tile: right click / long press, Enter or the menu key on the selected
+        tile, second A with a controller (extra: everything is also in the edit bar).
+        Opened by keyboard or controller it starts with "Verschieben" / "Karte
+        verschieben" (the same grab as X; the mouse and touch simply drag)."""
         ts = self._edit_tiles(hid)
         idx = tiles.find(ts, k)
         if idx is None:
@@ -4064,6 +4073,15 @@ class MainWindow(QMainWindow):
         self.edit_select(hid, k)
         a = ts[idx]
         menu = QMenu(self)
+        pe = getattr(self, "pad_edit", None)
+        if keyboard and pe is not None:
+            mv = menu.addAction(t("menu_move_tile"))
+            mv.setEnabled(tiles.is_active(a))
+            mv.triggered.connect(lambda: QTimer.singleShot(0, lambda: pe.start_move(hid, k)))
+            mc = menu.addAction(t("menu_move_card"))
+            mc.setEnabled(len(pe._rows()) > 1)
+            mc.triggered.connect(lambda: QTimer.singleShot(0, lambda: pe.start_move(hid)))
+            menu.addSeparator()
         self._add_size_actions(menu.addMenu(t("tile_size_menu")), a)
         dup = menu.addAction(t("tile_duplicate"))
         dup.setEnabled(tiles.is_active(a) and tiles.TYPES.get(a["typ"], {}).get("kind") == "action")
