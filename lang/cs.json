@@ -299,5 +299,18 @@
   "st_api_fix_unknown": "Aktualizujte MoonDeck Buddy na hostiteli i BuddyRemote.",
   "why_mismatch_old": "Nedostupné: verze Buddy nesouhlasí (aktualizujte hostitele)",
   "why_mismatch_new": "Nedostupné: verze Buddy nesouhlasí (aktualizujte BuddyRemote)",
-  "why_mismatch_unknown": "Nedostupné: verze Buddy nesouhlasí"
+  "why_mismatch_unknown": "Nedostupné: verze Buddy nesouhlasí",
+  "disc_section": "AUTOMATICKÉ VYHLEDÁNÍ (VOLITELNÉ)",
+  "disc_search": "Hledat hostitele GameStream",
+  "disc_hint": "Najde PC se Sunshine/Apollo ve stejné síti. Jakékoli jiné PC přidáte výše ručně jako obvykle.",
+  "disc_running": "Hledání …",
+  "disc_found": "Nalezeno: {n}. Klepnutím vyplníte název a IP.",
+  "disc_buddy_ok": "Buddy dostupný",
+  "disc_buddy_no": "Buddy nedostupný",
+  "disc_known": "již přidán",
+  "disc_taken": "„{name}“ vyplněno. Pokračujte tlačítkem Uložit.",
+  "disc_none": "Nenalezeni žádní hostitelé GameStream",
+  "disc_none_detail": "To je normální, pokud na PC neběží Sunshine/Apollo. Zadejte IP ručně.",
+  "disc_failed": "Hledání není možné",
+  "disc_failed_detail": "IP můžete zadat ručně jako obvykle."
 }

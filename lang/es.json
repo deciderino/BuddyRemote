@@ -299,5 +299,18 @@
   "st_api_fix_unknown": "Actualiza MoonDeck Buddy en el host y BuddyRemote.",
   "why_mismatch_old": "No disponible: la versión de Buddy no coincide (actualiza el host)",
   "why_mismatch_new": "No disponible: la versión de Buddy no coincide (actualiza BuddyRemote)",
-  "why_mismatch_unknown": "No disponible: la versión de Buddy no coincide"
+  "why_mismatch_unknown": "No disponible: la versión de Buddy no coincide",
+  "disc_section": "DETECCIÓN AUTOMÁTICA (OPCIONAL)",
+  "disc_search": "Buscar hosts GameStream",
+  "disc_hint": "Encuentra PCs con Sunshine/Apollo en la misma red. Cualquier otro PC se añade a mano arriba, como siempre.",
+  "disc_running": "Buscando …",
+  "disc_found": "Encontrados: {n}. Toca uno para rellenar nombre e IP.",
+  "disc_buddy_ok": "Buddy accesible",
+  "disc_buddy_no": "Buddy no accesible",
+  "disc_known": "ya añadido",
+  "disc_taken": "«{name}» rellenado. Continúa con Guardar.",
+  "disc_none": "No se encontraron hosts GameStream",
+  "disc_none_detail": "Es normal si el PC no ejecuta Sunshine/Apollo. Introduce su IP a mano.",
+  "disc_failed": "Búsqueda no disponible",
+  "disc_failed_detail": "Puedes introducir la IP a mano como siempre."
 }

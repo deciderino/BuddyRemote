@@ -467,6 +467,96 @@ def check_buddy_api(ip: str, port: int = 59999, timeout=5.0) -> tuple[bool, str]
         return False, str(e)
 
 
+# --- GameStream auto-discovery (1.4, optional) ---------------------------------------
+# "Add host" can search the local network for GameStream hosts (Sunshine, Apollo and
+# other forks announce _nvstream._tcp via mDNS) with "moondeck-cli host scan". This is
+# only a convenience: many PCs run no stream host at all and are added by hand as before.
+SCAN_TIMEOUT = 3
+
+def parse_scan_output(out: str) -> list | None:
+    """'host scan --json' output (a log line, then a JSON list of {address, port,
+    hostName, uniqueId}) -> [{'name', 'ip', 'gs_id'}], one entry per uniqueId (first
+    address wins), sorted by name. None when no JSON list is found."""
+    text = out or ""
+    dec = json.JSONDecoder()
+    data = None
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith("["):
+            try:
+                data, _ = dec.raw_decode(text, pos + len(line) - len(line.lstrip()))
+            except ValueError:
+                data = None
+            if isinstance(data, list):
+                break
+            data = None
+        pos += len(line)
+    if data is None:
+        return None
+    hosts, seen = [], set()
+    for h in data:
+        if not isinstance(h, dict):
+            continue
+        ip = str(h.get("address") or "").strip()
+        uid = str(h.get("uniqueId") or "").strip()
+        if not ip or not uid or uid in seen:
+            continue
+        seen.add(uid)
+        name = str(h.get("hostName") or "").strip() or ip
+        hosts.append({"name": name, "ip": ip, "gs_id": uid})
+    hosts.sort(key=lambda h: (h["name"].lower(), h["ip"]))
+    return hosts
+
+def scan_gamestream(buddy_port: int = 59999, timeout: float = SCAN_TIMEOUT,
+                    probe=None) -> tuple[bool, list, str]:
+    """Search GameStream hosts and check Buddy on each one (blocking, run it in a thread).
+    Returns (ok, hosts, error); every host gets 'buddy': True/False.
+    The CLI runs with --dry on a throw-away config path: it never writes a config."""
+    tmp = APP_DIR / f".tmp_scan_{os.urandom(3).hex()}.json"
+    try:
+        rc, out, err = run_cli(["host", "scan", "--dry", "--json", "--timeout", str(timeout)],
+                               timeout=timeout + 30, config_override=tmp)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    hosts = parse_scan_output(out) if rc == 0 else None
+    if hosts is None:
+        msg = (err or out or f"Exit {rc}").strip().splitlines()
+        return False, [], (msg[-1][:200] if msg else f"Exit {rc}")
+    probe = probe or (lambda ip, port: check_buddy_api(ip, port, timeout=2.5)[0])
+    threads = []
+    for h in hosts:
+        h["buddy"] = False
+        def one(h=h):
+            try:
+                h["buddy"] = bool(probe(h["ip"], buddy_port))
+            except Exception:
+                h["buddy"] = False
+        th = threading.Thread(target=one, daemon=True)
+        th.start()
+        threads.append(th)
+    for th in threads:
+        th.join(6)
+    return True, hosts, ""
+
+def discovery_state(found: dict, hosts: list) -> str:
+    """'known' when the found host is already in the list (same gs_id; hosts without
+    gs_id - the normal case for hosts added by hand - by the same IP), else 'ok'
+    (Buddy answers) or 'nobuddy'."""
+    for h in hosts or []:
+        if not isinstance(h, dict):
+            continue
+        gid = h.get("gs_id")
+        if gid:
+            if gid == found.get("gs_id"):
+                return "known"
+        elif str(h.get("ip") or "").strip() == found.get("ip"):
+            return "known"
+    return "ok" if found.get("buddy") else "nobuddy"
+
+
 # --- MoonDeck CLI release (nightly) -------------------------------------------------
 CLI_RELEASE_API = "https://api.github.com/repos/FrogTheFrog/moondeck/releases/tags/nightly"
 CLI_RELEASE_PAGE = "https://github.com/FrogTheFrog/moondeck/releases/tag/nightly"

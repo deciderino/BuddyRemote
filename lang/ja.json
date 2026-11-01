@@ -299,5 +299,18 @@
   "st_api_fix_unknown": "ホストの MoonDeck Buddy と BuddyRemote を最新にしてください。",
   "why_mismatch_old": "利用不可: Buddy のバージョンが一致しません (ホストを更新)",
   "why_mismatch_new": "利用不可: Buddy のバージョンが一致しません (BuddyRemote を更新)",
-  "why_mismatch_unknown": "利用不可: Buddy のバージョンが一致しません"
+  "why_mismatch_unknown": "利用不可: Buddy のバージョンが一致しません",
+  "disc_section": "自動検出（任意）",
+  "disc_search": "GameStream ホストを検索",
+  "disc_hint": "同じネットワークで Sunshine/Apollo を実行している PC を探します。その他の PC はこれまでどおり上で手動で追加できます。",
+  "disc_running": "検索中 …",
+  "disc_found": "見つかりました: {n}。タップすると名前と IP が入力されます。",
+  "disc_buddy_ok": "Buddy 接続可",
+  "disc_buddy_no": "Buddy 接続不可",
+  "disc_known": "追加済み",
+  "disc_taken": "「{name}」を入力しました。「保存」で続行します。",
+  "disc_none": "GameStream ホストが見つかりません",
+  "disc_none_detail": "PC で Sunshine/Apollo が動いていなければ正常です。IP を手動で入力してください。",
+  "disc_failed": "検索できません",
+  "disc_failed_detail": "いつもどおり IP を手動で入力できます。"
 }

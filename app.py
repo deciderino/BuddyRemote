@@ -1854,6 +1854,62 @@ class TilePreview(QWidget):
         p.end()
 
 
+class DiscoveryRow(QPushButton):
+    """UI only: one host found by the GameStream search in "Add host". The whole row is
+    one 48 px target (touch + controller). state: 'ok' (Buddy answers), 'nobuddy'
+    (greyed, still selectable), 'known' (already in the list: disabled, skipped by
+    the controller)."""
+    def __init__(self, found: dict, state: str, light: bool):
+        super().__init__()
+        self.found, self.state = found, state
+        c = ui_colors(light)
+        self.setObjectName("discRow")
+        self.setFixedHeight(48)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 8, 0)
+        lay.setSpacing(12)
+        dim = state != "ok"
+        fg = c["sub"] if dim else c["name"]
+        if state == "known":
+            fg = "#a6a6a6" if light else "#6a6a6a"
+        dot_col = {"ok": c["online"], "nobuddy": c["offline"], "known": c["unknown"]}[state]
+        status = {"ok": t("disc_buddy_ok"), "nobuddy": t("disc_buddy_no"), "known": t("disc_known")}[state]
+
+        def lab(text, col, w=None, bold=False, px=15):
+            lb = QLabel()
+            lb.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            lb.setStyleSheet(f"color: {col}; background: transparent; border: none; font-size: {px}px;"
+                             + (" font-weight: bold;" if bold else ""))
+            if w:
+                lb.setFixedWidth(w)
+                f = QFont(lb.font())
+                f.setPixelSize(px)
+                f.setBold(bold)
+                text = QFontMetrics(f).elidedText(text, Qt.TextElideMode.ElideRight, w)
+            lb.setText(text)
+            return lb
+        lay.addWidget(lab("●" if state == "ok" else "○", dot_col, 16))
+        self.name_lbl = lab(found["name"], fg, 170, bold=not dim)
+        lay.addWidget(self.name_lbl)
+        lay.addWidget(lab(found["ip"], fg if state == "known" else c["sub"], 120, px=14))
+        ok_col = c["steam_t"]
+        self.status_lbl = lab(status, fg if dim else ok_col, px=14)
+        lay.addWidget(self.status_lbl, 1)
+        self.setToolTip(f"{found['name']} · {found['ip']} · {status}")
+        self.setAccessibleName(f"{found['name']} {found['ip']} {status}")
+        if state != "known":
+            plus = lab("＋", fg if dim else accent_color(light).name(), px=18, bold=True)
+            plus.setFixedSize(36, 32)
+            plus.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            b = c["card_b"] if dim else c["sub"]
+            plus.setStyleSheet(plus.styleSheet() + f" border: 2px solid {b}; border-radius: 6px;")
+            lay.addWidget(plus)
+        else:
+            self.setEnabled(False)
+            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+
 class HostDialog(QDialog):
     """Add a host / connection settings of a host.
     Adding: connection fields + tile template (read-only preview).
@@ -1931,6 +1987,13 @@ class HostDialog(QDialog):
             hint.setWordWrap(True)
             left.addWidget(hint)
 
+        # --- GameStream auto-discovery (adding only, optional) ----------------------
+        self.search_btn = None
+        self.disc_rows = []
+        self._picked = None
+        if host is None:
+            self._build_discovery(outer, light)
+
         # --- buttons --------------------------------------------------------------
         btns = QHBoxLayout()
         if host is not None:
@@ -1954,6 +2017,162 @@ class HostDialog(QDialog):
         self._sync()
         install_dialog_nav(self)
         fit_dialog_to_screen(self)
+
+    # --- GameStream auto-discovery ---------------------------------------------------
+    DISC_VISIBLE_ROWS = 3.5     # from 4 results the list scrolls (dialog fits 1280x800)
+
+    def _build_discovery(self, outer, light):
+        """Optional search for GameStream hosts (Sunshine/Apollo). Adding by hand works
+        exactly as before; a pick only fills in name + IP (and remembers the host id)."""
+        c = ui_colors(light)
+        acc = accent_color(light).name()
+        sec = QVBoxLayout()
+        sec.setSpacing(8)
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background: {c['card_b']};")
+        sec.addWidget(line)
+        head = QLabel(t("disc_section"))
+        head.setObjectName("dlgSection")
+        sec.addWidget(head)
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        self.search_btn = QPushButton(t("disc_search"))
+        self.search_btn.setObjectName("discSearch")
+        self.search_btn.setMinimumHeight(48)
+        self.search_btn.setMinimumWidth(260)
+        self.search_btn.clicked.connect(self.start_discovery)
+        row.addWidget(self.search_btn)
+        self.disc_state = QLabel(t("disc_hint"))
+        self.disc_state.setObjectName("dlgHint")
+        self.disc_state.setWordWrap(True)
+        row.addWidget(self.disc_state, 1)
+        sec.addLayout(row)
+        self.disc_list = QWidget()
+        self.disc_list.setObjectName("discList")
+        self.disc_box = QVBoxLayout(self.disc_list)
+        self.disc_box.setContentsMargins(0, 0, 0, 0)
+        self.disc_box.setSpacing(6)
+        self.disc_scroll = QScrollArea()
+        self.disc_scroll.setObjectName("discScroll")
+        self.disc_scroll.setWidgetResizable(True)
+        self.disc_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.disc_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.disc_scroll.setWidget(self.disc_list)
+        self.disc_scroll.setVisible(False)
+        sec.addWidget(self.disc_scroll)
+        outer.addLayout(sec)
+        self.setStyleSheet(self.styleSheet() + f"""
+            QScrollArea#discScroll, QWidget#discList {{ background: transparent; }}
+            QPushButton#discRow {{ text-align: left; background: {c['card']}; border: 2px solid {c['card_b']}; border-radius: 6px; }}
+            QPushButton#discRow:hover, QPushButton#discRow:focus {{ border: 2px solid {acc}; }}
+            QPushButton#discRow[picked="true"] {{ background: {c['cur']}; border: 2px solid {c['cur_b']}; }}
+            QPushButton#discRow:disabled {{ background: transparent; border: 2px dashed {c['card_b']}; }}
+        """)
+        self.toast = Toast(self)
+        self._disc_result = None
+        self._disc_timer = QTimer(self)
+        self._disc_timer.setInterval(50)
+        self._disc_timer.timeout.connect(self._poll_discovery)
+
+    def _toast_bottom(self):
+        """Toast.place(): just above the Save/Cancel row."""
+        return self.save_btn.mapTo(self, self.save_btn.rect().topLeft()).y() - 10
+
+    def _known_hosts(self) -> list:
+        par = self.parent()
+        cfg = getattr(par, "cfg", None) if par is not None else None
+        return list((cfg or {}).get("hosts") or [])
+
+    def start_discovery(self):
+        """Search in a worker thread (CLI scan ~3 s + Buddy check); the GUI keeps running."""
+        if self.search_btn is None or self._disc_timer.isActive():
+            return
+        self._clear_disc_rows()
+        self.search_btn.setEnabled(False)
+        self.disc_state.setText(t("disc_running"))
+        port = self._port() or 59999
+        box = {}
+        self._disc_result = box
+
+        def worker():
+            try:
+                box["r"] = backend.scan_gamestream(port)
+            except Exception as e:
+                logging.exception("GameStream search")
+                box["r"] = (False, [], str(e))
+        threading.Thread(target=worker, daemon=True).start()
+        self._disc_timer.start()
+
+    def _poll_discovery(self):
+        box = self._disc_result
+        if box is None or "r" not in box:
+            return
+        self._disc_timer.stop()
+        self._disc_result = None
+        ok, found, err = box["r"]
+        self.show_discovery(ok, found, err)
+
+    def show_discovery(self, ok: bool, found: list, err: str = ""):
+        self._clear_disc_rows()
+        self.search_btn.setEnabled(True)
+        if not ok or not found:
+            if not ok:
+                logging.warning("GameStream search failed: %s", err)
+            self.disc_state.setText(t("disc_hint"))
+            self.toast.show_message(t("disc_none") if ok else t("disc_failed"),
+                                    t("disc_none_detail") if ok else t("disc_failed_detail"),
+                                    "info", self._light, 6000)
+            self.search_btn.setFocus()
+            return
+        logging.info("GameStream search: %d host(s) found", len(found))
+        known = self._known_hosts()
+        for f in found:
+            r = DiscoveryRow(f, backend.discovery_state(f, known), self._light)
+            r.clicked.connect(lambda _=False, r=r: self.pick_discovered(r))
+            self.disc_box.addWidget(r)
+            self._nav_filter.register(r)
+            self.disc_rows.append(r)
+        chain = [self.search_btn] + [r for r in self.disc_rows if r.isEnabled()] + [self.save_btn]
+        for a, b in zip(chain, chain[1:]):
+            QWidget.setTabOrder(a, b)       # rows come right after the search button
+        n = len(self.disc_rows)
+        sp = self.disc_box.spacing()
+        vis = min(n, self.DISC_VISIBLE_ROWS)
+        self.disc_scroll.setFixedHeight(int(vis * 48 + (max(1, int(vis + 0.5)) - 1) * sp))
+        self.disc_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if n > 3 else Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.disc_scroll.setVisible(True)
+        self.disc_state.setText(t("disc_found", n=n))
+        first = next((r for r in self.disc_rows if r.isEnabled()), None)
+        (first or self.search_btn).setFocus()
+        self.adjustSize()
+
+    def pick_discovered(self, row: "DiscoveryRow"):
+        """Fills in name (the host name Sunshine reports, editable) and IP - nothing else."""
+        if row.state == "known":
+            return
+        self._picked = dict(row.found)
+        self.name_edit.setText(row.found["name"])
+        self.ip_edit.setText(row.found["ip"])
+        for o in self.disc_rows:
+            o.setProperty("picked", o is row)
+            o.style().unpolish(o)
+            o.style().polish(o)
+        self.disc_state.setText(t("disc_taken", name=row.found["name"]))
+
+    def _clear_disc_rows(self):
+        for r in self.disc_rows:
+            r.setParent(None)
+            r.deleteLater()
+        self.disc_rows = []
+        if getattr(self, "disc_scroll", None) is not None:
+            self.disc_scroll.setVisible(False)
+
+    def done(self, r):
+        if getattr(self, "_disc_timer", None) is not None:
+            self._disc_timer.stop()      # a late search result is dropped
+        super().done(r)
 
     def _apply_template(self):
         """Adding: the chosen template replaces the preview (nothing to undo yet)."""
@@ -2021,6 +2240,12 @@ class HostDialog(QDialog):
             # the chosen template, exact positions, current layout revision
             data["aktionen"] = tiles.copy_tiles(self._tiles)
             data["layout_rev"] = tiles.LAYOUT_REV
+            # picked from the GameStream search (and the IP was kept): remember the host
+            # id so a later search shows it as "already added". Optional - hosts added by
+            # hand have no gs_id, and nothing else in the app looks at it.
+            p = self._picked
+            if p and p.get("gs_id") and p.get("ip") == ip:
+                data["gs_id"] = p["gs_id"]
         return data
 
 # ---------------------------------------------------------------------------

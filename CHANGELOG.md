@@ -7,6 +7,11 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 
 ## [Unreleased]
 
+### Added (1.4-preview3)
+
+- **Optional GameStream auto-discovery in "Add host".** A new section "Auto-detect (optional)" with a "Search for GameStream hosts" button looks for PCs running Sunshine or Apollo in the local network (the bundled MoonDeck CLI's `host scan --dry --json`, about 3 s, IPv4) and then checks MoonDeck Buddy on each one with the port from the Buddy port field. Each result is one 48 px row (touch and controller): Buddy answers, Buddy not reachable (greyed but still selectable) or already added (disabled and skipped by the controller). Tapping a row only fills in name and IP; the MAC still comes from pairing. Up to three results are shown at once, more scroll, so the dialog fits 1280×800. While searching the button is greyed and says "Searching …"; if nothing is found or the search fails, a toast says so. The search is only in "Add host", not in the ⚙ connection settings. The CLI runs with `--dry` on a throw-away config path and never touches your settings; no console window on Windows.
+- **Discovery is purely optional.** Not every PC runs a stream host: adding a host by hand works exactly as before, and hosts without Sunshine/Apollo are never flagged or treated differently (cards, status, pairing, update check). A host picked from the search remembers the host id Sunshine reports as an optional `gs_id`, used only to show it as "already added" in a later search; hosts without it (the normal case) are matched by IP. Existing configs load unchanged. All texts in all 8 languages.
+
 ### Fixed (1.4-preview2)
 
 - **Touch: moving tiles in edit mode.** Holding a tile no longer breaks off at the slightest finger wobble (the allowed movement during the hold went from 12 to 32 px, about 4 mm on the Steam Deck screen). The edit hint now says how it works: "Press and hold, then drag to move anything with ⠿ · tap to edit" (all 8 languages).
