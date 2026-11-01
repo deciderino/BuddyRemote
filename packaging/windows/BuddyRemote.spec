@@ -5,8 +5,9 @@
 # collects), the MoonDeck CLI (bundled/moondeck-cli.exe, unmodified), SDL2.dll (zlib) for
 # the gamepad in <bundle>/libsdl2 (gamepad.py points PYSDL2_DLL_PATH there), license texts.
 # Not bundled: opengl32sw.dll (Mesa software OpenGL, only for Qt Quick / GL fallback) and
-# d3dcompiler_47.dll; BuddyRemote is a Qt Widgets app and does not need them.
-import os
+# d3dcompiler_47.dll; BuddyRemote is a Qt Widgets app and does not need them. Unused Qt
+# plugins/translations are dropped by packaging/qt_trim.py (shared with the Linux spec).
+import os, sys
 ROOT = os.path.abspath(os.path.join(SPECPATH, "..", ".."))
 STAGE = os.path.join(ROOT, "build", "win-stage")
 
@@ -30,6 +31,9 @@ DROP = {"opengl32sw.dll", "d3dcompiler_47.dll"}
 dropped = sorted({os.path.basename(b[0]) for b in a.binaries if os.path.basename(b[0]).lower() in DROP})
 print("Not bundled:", " ".join(dropped) or "-")
 a.binaries = [b for b in a.binaries if os.path.basename(b[0]).lower() not in DROP]
+sys.path.insert(0, os.path.join(ROOT, "packaging"))
+import qt_trim
+qt_trim.trim(a)    # unused Qt plugins/translations (see packaging/qt_trim.py)
 
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="BuddyRemote",

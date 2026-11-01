@@ -36,6 +36,9 @@ def _keep(entry):
 dropped = sorted({os.path.basename(b[0]) for b in a.binaries if not _keep(b)})
 print("Excluding host system libs:", " ".join(dropped))
 a.binaries = [b for b in a.binaries if _keep(b)]
+sys.path.insert(0, os.path.join(ROOT, "packaging"))
+import qt_trim
+qt_trim.trim(a)    # unused Qt plugins/translations (see packaging/qt_trim.py)
 if EXTRA:
     for f in sorted(os.listdir(EXTRA)):
         if ".so" in f:
