@@ -33,7 +33,7 @@ OLD_HOME = os.environ.get("HOME")
 
 
 # app.py was split into modules (1.3.1); each load must import them from the copy, fresh.
-SPLIT_MODULES = ("paths", "i18n", "config", "backend", "platform_util", "theme", "gamepad", "dialogs")
+SPLIT_MODULES = ("paths", "i18n", "config", "backend", "platform_util", "theme", "gamepad", "padedit", "dialogs")
 
 
 def purge_split_modules():

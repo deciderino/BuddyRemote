@@ -14,7 +14,6 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import test_ui as U                                       # noqa: E402
 from test_ui import setUpModule, tearDownModule, pump    # noqa: E402,F401
-import tiles                                             # noqa: E402
 
 try:
     from PyQt6.QtCore import QPoint
@@ -144,18 +143,21 @@ class GamepadTests(U.UiTestCase):
         self.press("a")                    # A on "Bearbeiten" -> edit mode
         pump(20)
         start = list(self.pos(w._edit_hid, "boot"))
-        for b in ("right", "right", "a", "right", "b"):
+        for b in ("a", "x", "right", "x"):      # into the tiles, grab, move, release
             self.press(b)
         self.assertNotEqual(start, list(self.pos("h0", "boot")), "gamepad could not move a tile")
 
     def test_dpad_moves_tiles_bumpers_leave_the_editor(self):
-        """Intended: inside a card's tile editor the D-pad moves tiles (it never leaves the
-        editor); LB/RB jump to the previous/next row: other cards, the edit bar, the log."""
+        """1.4 levels: on the card level the D-pad goes from card to card (left/right do
+        nothing), the tiles are moved only after A (tiles) + X (grab); LB/RB still jump to
+        the previous/next row: other cards, the edit bar, the log."""
         w = self.w
         w.enter_edit_mode(); pump(20)
         w.input_mode.set_nav_visible(True)
         w.host_rows["h0"].editor.setFocus(); pump(5)
-        self.assertEqual(self.walk(["up", "down", "left", "right"]), [("editor", "h0")])
+        self.assertEqual(self.walk(["left", "right"]), [("editor", "h0")])
+        self.assertEqual(self.walk(["down", "down", "up"]), [("editor", "h1"), ("editor", "h2")])
+        self.assertEqual(self.ed_host(QApplication.focusWidget()), "h1")
         w.host_rows["h0"].editor.setFocus(); pump(5)
         fwd = self.walk(["rb"] * 14)
         self.assertIn(("editor", "h1"), fwd, "RB does not reach the next card's tiles")
@@ -170,8 +172,11 @@ class GamepadTests(U.UiTestCase):
         ed = QApplication.focusWidget()
         hid = self.ed_host(ed)
         self.assertEqual(hid, "h1")
-        key = tiles.key(ed.tiles[0]); start = list(self.pos(hid, key))
-        self.press("down"); self.press("down")     # (h1's first tile has no room to the right)
+        self.assertEqual(w.pad_edit.level, 1)
+        self.press("a")                             # tiles of h1, the first one has the ring
+        key = w.pad_edit.key; start = list(self.pos(hid, key))
+        for b in ("x", "down", "down", "x"):        # (h1's first tile has no room to the right)
+            self.press(b)
         self.assertNotEqual(start, list(self.pos(hid, key)))
 
     def test_bumpers_are_tab_in_dialogs(self):
@@ -182,11 +187,16 @@ class GamepadTests(U.UiTestCase):
         w = self.w
         w.enter_edit_mode(); pump(20)
         w.input_mode.set_nav_visible(True); pump(3)
-        self.assertEqual(w.edit_info.text(), U.app.t("edit_hint_pad"))
-        w.input_mode.set_nav_visible(False); pump(3)          # mouse / touch used
+        self.press("left")                                     # controller used
+        self.assertTrue(w.edit_hints.isVisible())
+        self.assertFalse(w.edit_info.isVisible())
+        w.input_mode.set_pad_active(False); pump(3)            # mouse / touch / keyboard used
+        self.assertFalse(w.edit_hints.isVisible())
         self.assertEqual(w.edit_info.text(), U.app.t("edit_hint"))
-        w.input_mode.set_nav_visible(True); pump(3)
+        self.press("left")
+        self.assertTrue(w.edit_hints.isVisible())
         self.br.devices.clear(); w._sync_edit_bar()           # pad unplugged
+        self.assertFalse(w.edit_hints.isVisible())
         self.assertEqual(w.edit_info.text(), U.app.t("edit_hint"))
 
     def test_restore_collapsed_bar(self):

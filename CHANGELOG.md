@@ -7,6 +7,12 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 
 ## [Unreleased]
 
+### Changed (not yet in a preview)
+
+- **Controller edit mode with two levels.** In edit mode the controller first moves between the host cards (level 1, the D-pad goes up/down from card to card). A opens the card's tiles (level 2): the D-pad moves a 3 px accent ring from tile to tile and the other cards are greyed. A selects the tile, a second A opens its menu (size, duplicate, hide/remove; D-pad chooses, A applies, B closes). X grabs the card (level 1) or the tile (level 2); the D-pad then moves it while the others make room, X releases it, B puts it back where it was. B goes back one level; B on the card level leaves edit mode. LB/RB still jump between rows (cards, edit bar, log). Undo/redo cover moves done with the controller. Mouse and touch work exactly as before.
+- **Controller button hints in the edit bar.** While a controller is used in edit mode, the edit bar shows where you are ("Cards:", "Gaming-PC › Tiles:", "Move “Wake”:" …) and what the buttons do right now, e.g. "A Edit tiles · X Grab card · B Done · LB/RB Switch row"; unavailable actions are greyed. The glyphs follow the controller type reported by SDL: PlayStation pads show ✕ ○ □ and L1/R1, all others (Xbox, Steam Deck, Switch, unknown) A B X and LB/RB. The hints disappear at once when the mouse moves (more than 4 px), is clicked or scrolled, the screen is touched or a real key is pressed (keys Steam Input sends together with a controller button do not count); normal mode shows no hints. Replaces the single "Controller: …" hint line. All 8 languages.
+- **Note for an own MoonDeck CLI.** Options › Files shows "Not tested with BuddyRemote – use at your own risk." under a chosen own CLI, the confirmation after saving one repeats it, and the toast about a newer MoonDeck CLI adds "The new CLI has not been tested with BuddyRemote yet." The toast keeps its link to the release page; nothing is downloaded automatically. All 8 languages.
+
 ### Changed (1.4-preview4)
 
 - Version 1.4-preview4 (GitHub pre-release like the earlier previews; the final 1.4 replaces it, 1.3.1 does not see it).

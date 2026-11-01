@@ -530,9 +530,11 @@ class OptionsDialog(QDialog):
         self.cli_path_lbl.setObjectName("cliPath")
         self.cli_sha_lbl = _label("", cc["sub"], 11, sel=True)
         self.cli_note = _label(t("cli_custom_pending"), cc["sub"], 12)
+        self.cli_untested = _label("⚠ " + t("cli_untested"), cc["warn_t"], 12)    # own CLI: no tests here
+        self.cli_untested.setObjectName("cliUntested")
         self.cli_err = _label("", cc["err"])           # picked file rejected: said here, not as a toast
         self.cli_err.setObjectName("cliError")
-        for w in (self.cli_title, self.cli_path_lbl, self.cli_sha_lbl, self.cli_note, self.cli_err):
+        for w in (self.cli_title, self.cli_path_lbl, self.cli_sha_lbl, self.cli_untested, self.cli_note, self.cli_err):
             v.addWidget(w)
         btns = QHBoxLayout()
         btns.setSpacing(8)
@@ -591,6 +593,7 @@ class OptionsDialog(QDialog):
         self.cli_path_lbl.setVisible(custom)
         self.cli_sha_lbl.setVisible(custom and bool(self.cli_sha_lbl.text()))
         self.cli_back_btn.setVisible(custom)
+        self.cli_untested.setVisible(view == "active")
         self.cli_note.setVisible(self._custom_cli != self._saved_cli)
 
     def _pick_cli_file(self) -> str:

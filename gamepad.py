@@ -22,7 +22,21 @@ _FIELD_TYPES = (QLineEdit, QAbstractSpinBox, QComboBox)
 _PAD_KEYS = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left, Qt.Key.Key_Right,
              Qt.Key.Key_Return, Qt.Key.Key_Escape, Qt.Key.Key_Tab, Qt.Key.Key_Backtab)
 _REVEAL_KEYS = _PAD_KEYS + (Qt.Key.Key_Enter, Qt.Key.Key_Space)
+_KEY_NAMES = {Qt.Key.Key_Up: "up", Qt.Key.Key_Down: "down", Qt.Key.Key_Left: "left",
+              Qt.Key.Key_Right: "right", Qt.Key.Key_Return: "a", Qt.Key.Key_Escape: "b"}
 _MOUSE_MOVE_PX = 4
+_PAD_OFF_MS = 150       # a real key press ends pad mode only if no pad event follows (Steam Input)
+_PS_NAMES = ("ps3", "ps4", "ps5", "playstation", "dualshock", "dualsense", "sony")
+
+
+def pad_style(sdl_type=None, name: str = "", ps_types=()) -> str:
+    """Button glyph style of a controller: "ps" (cross/circle/square/triangle) for
+    PlayStation pads, "xbox" (A/B/X/Y) for everything else (Xbox, Switch, Steam Deck,
+    virtual and unknown pads, which SDL maps to the Xbox layout)."""
+    if sdl_type is not None and ps_types:
+        return "ps" if sdl_type in ps_types else "xbox"
+    n = (name or "").lower()
+    return "ps" if any(x in n for x in _PS_NAMES) else "xbox"
 
 
 class InputModeController(QObject):
@@ -39,6 +53,11 @@ class InputModeController(QObject):
         super().__init__(win)
         self.win = win
         self.nav_visible = True
+        self.pad_active = False        # the app is being used with a controller (hints shown)
+        self._pad_off = QTimer(self)
+        self._pad_off.setSingleShot(True)
+        self._pad_off.setInterval(_PAD_OFF_MS)
+        self._pad_off.timeout.connect(lambda: self.set_pad_active(False))
         self.pad = None                # GamepadBridge, set by the bridge
         self._last_main = None         # logical last focus in the main window (rows get rebuilt)
         self._last_real = {}           # key -> time a real key press passed through (dedup)
@@ -76,6 +95,31 @@ class InputModeController(QObject):
         fw = QApplication.focusWidget()
         self._set_ring(fw, on)
         self.win._on_focus_changed(None, fw)
+
+    # --- controller mode (button hints) ----------------------------------
+    def set_pad_active(self, on: bool):
+        if not on:
+            self._pad_off.stop()
+        if self.pad_active == on:
+            return
+        self.pad_active = on
+        if on:
+            self._last_pos = QCursor.pos()
+        cb = getattr(self.win, "_on_pad_mode_changed", None)
+        if cb is not None:
+            cb()
+
+    def note_pad(self):
+        """A native controller event arrived: pad mode on (cancels a pending switch-off)."""
+        self._pad_off.stop()
+        self.set_pad_active(True)
+
+    def _pad_edit_key(self, key) -> bool:
+        """Edit mode with a controller: keys Steam Input sends for the pad (or the keyboard
+        while pad mode is on) drive the same card/tile levels as the native buttons."""
+        name = _KEY_NAMES.get(key)
+        fn = getattr(self.win, "pad_edit_input", None)
+        return bool(name and self.pad_active and fn is not None and fn(name))
 
     # --- where the ring comes back --------------------------------------
     def _remember(self, w):
@@ -195,27 +239,37 @@ class InputModeController(QObject):
             if key == Qt.Key.Key_Enter:
                 key = Qt.Key.Key_Return
             mods = ev.modifiers() & ~(Qt.KeyboardModifier.KeypadModifier | Qt.KeyboardModifier.ShiftModifier)
+            dup = key in _PAD_KEYS and self.pad is not None and self.pad.is_duplicate(key)
+            if self.pad_active and not dup:
+                self._pad_off.start()      # keyboard used: pad mode ends unless the pad follows
             if key not in _REVEAL_KEYS or mods != Qt.KeyboardModifier.NoModifier:
                 return False
-            if key in _PAD_KEYS and self.pad is not None and self.pad.is_duplicate(key):
+            if dup:
                 return True            # same press already arrived natively from the gamepad
             if key in _PAD_KEYS:
                 self._last_real[key] = time.monotonic()
-            return self.handle_input(key)
-        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick, QEvent.Type.Wheel):
-            if ev.spontaneous() and self.nav_visible:
-                self.set_nav_visible(False)
-        elif et in (QEvent.Type.MouseMove, QEvent.Type.HoverMove) and self.nav_visible:
+            if self.handle_input(key):
+                return True
+            return self._pad_edit_key(key)
+        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick, QEvent.Type.Wheel,
+                  QEvent.Type.TouchBegin):
+            if ev.spontaneous():
+                self.set_pad_active(False)
+                if self.nav_visible and et != QEvent.Type.TouchBegin:
+                    self.set_nav_visible(False)
+        elif et in (QEvent.Type.MouseMove, QEvent.Type.HoverMove) and (self.nav_visible or self.pad_active):
             pos = QCursor.pos()
-            if (pos - self._last_pos).manhattanLength() >= _MOUSE_MOVE_PX:
+            if (pos - self._last_pos).manhattanLength() >= _MOUSE_MOVE_PX:   # jitter < 4 px is ignored
+                self.set_pad_active(False)
                 self.set_nav_visible(False)
         return False
 
 
 class GamepadSource:
     """Abstract gamepad event source. poll() returns a list of normalized events:
-    ("added", dev, name) / ("removed", dev) / ("button", dev, name, down) / ("axis", dev, name, value)
-    with button names a, b, up, down, left, right and axis names lx, ly (value -1.0 .. 1.0)."""
+    ("added", dev, name, style) / ("removed", dev) / ("button", dev, name, down) / ("axis", dev, name, value)
+    with button names a, b, x, up, down, left, right, lb, rb and axis names lx, ly (value
+    -1.0 .. 1.0); style is "xbox" or "ps" (button glyphs, see pad_style())."""
 
     def open(self) -> str:
         """Returns "" on success or a reason why gamepads are unavailable."""
@@ -256,11 +310,21 @@ class SDLGamepadSource(GamepadSource):
         self.sdl = sdl2
         B = sdl2
         self._buttons = {B.SDL_CONTROLLER_BUTTON_A: "a", B.SDL_CONTROLLER_BUTTON_B: "b",
+                         B.SDL_CONTROLLER_BUTTON_X: "x",
                          B.SDL_CONTROLLER_BUTTON_DPAD_UP: "up", B.SDL_CONTROLLER_BUTTON_DPAD_DOWN: "down",
                          B.SDL_CONTROLLER_BUTTON_DPAD_LEFT: "left", B.SDL_CONTROLLER_BUTTON_DPAD_RIGHT: "right",
                          B.SDL_CONTROLLER_BUTTON_LEFTSHOULDER: "lb", B.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: "rb"}
         self._axes = {B.SDL_CONTROLLER_AXIS_LEFTX: "lx", B.SDL_CONTROLLER_AXIS_LEFTY: "ly"}
+        self._ps_types = tuple(getattr(B, n) for n in ("SDL_CONTROLLER_TYPE_PS3", "SDL_CONTROLLER_TYPE_PS4",
+                                                        "SDL_CONTROLLER_TYPE_PS5") if hasattr(B, n))
         return ""
+
+    def _style(self, c, name) -> str:
+        try:
+            ty = self.sdl.SDL_GameControllerGetType(c)       # SDL >= 2.0.12
+        except Exception:
+            ty = None
+        return pad_style(ty, name, self._ps_types)
 
     def poll(self) -> list:
         sdl2 = self.sdl
@@ -279,7 +343,7 @@ class SDLGamepadSource(GamepadSource):
                     else:
                         self.pads[iid] = c
                         name = (sdl2.SDL_GameControllerName(c) or b"?").decode(errors="replace")
-                        out.append(("added", iid, name))
+                        out.append(("added", iid, name, self._style(c, name)))
             elif t == sdl2.SDL_CONTROLLERDEVICEREMOVED:
                 c = self.pads.pop(ev.cdevice.which, None)
                 if c:
@@ -306,7 +370,8 @@ class SDLGamepadSource(GamepadSource):
 
 class GamepadBridge(QObject):
     """UI only: turns gamepad input into the key events the app already understands.
-    D-pad / left stick -> arrow keys (with repeat), A -> Enter, B -> Escape.
+    D-pad / left stick -> arrow keys (with repeat), A -> Enter, B -> Escape, X has no key
+    (it only grabs/releases in the edit mode of the main window, see padedit.py).
     Only acts while one of our windows is the active window."""
     TICK_MS, IDLE_MS = 16, 200
     PRESS, RELEASE = 0.5, 0.35          # stick deadzone with hysteresis
@@ -314,7 +379,8 @@ class GamepadBridge(QObject):
     DEDUPE = 0.08                       # Steam Input double-input window (seconds)
     KEYS = {"up": Qt.Key.Key_Up, "down": Qt.Key.Key_Down, "left": Qt.Key.Key_Left,
             "right": Qt.Key.Key_Right, "a": Qt.Key.Key_Return, "b": Qt.Key.Key_Escape,
-            "lb": Qt.Key.Key_Backtab, "rb": Qt.Key.Key_Tab}     # bumpers: main window = nav_jump()
+            "lb": Qt.Key.Key_Backtab, "rb": Qt.Key.Key_Tab,     # bumpers: main window = nav_jump()
+            "x": None}                                          # edit mode only (pad_edit_input)
     REPEATING = ("up", "down", "left", "right")
 
     def __init__(self, controller, source=None, clock=time.monotonic):
@@ -324,6 +390,8 @@ class GamepadBridge(QObject):
         self.src = source
         self.clock = clock
         self.devices = {}
+        self.styles = {}                # dev -> "xbox" | "ps"
+        self.last_dev = None            # the controller used last (its glyphs are shown)
         self.pressed = {}               # (dev, button) -> bool
         self.sticks = {}                # dev -> {"lx": v, "ly": v, "dir": name|None}
         self.held = {}                  # name -> {"next": t, "repeat": bool, "native": bool}
@@ -352,12 +420,18 @@ class GamepadBridge(QObject):
             self.src.close()
             self.src = None
 
+    def style(self) -> str:
+        """Glyph style of the controller used last (Xbox when unknown)."""
+        if self.last_dev in self.styles:
+            return self.styles[self.last_dev]
+        return next(iter(self.styles.values()), "xbox") if self.styles else "xbox"
+
     # Steam Input dedup: a real key press equal to a gamepad press we just injected
     def is_duplicate(self, key) -> bool:
         if not self.devices:
             return False
         for name, h in self.held.items():
-            if self.KEYS[name] == key and h["native"]:
+            if key is not None and self.KEYS[name] == key and h["native"]:
                 return True
         return self.clock() - self.last_sent.get(key, -1e9) < self.DEDUPE
 
@@ -389,9 +463,13 @@ class GamepadBridge(QObject):
             kind, dev = e[0], e[1]
             if kind == "added":
                 self.devices[dev] = e[2]
-                logging.info("Gamepad connected: %s", e[2])
+                self.styles[dev] = e[3] if len(e) > 3 else pad_style(None, e[2])
+                logging.info("Gamepad connected: %s (%s)", e[2], self.styles[dev])
             elif kind == "removed":
                 self.devices.pop(dev, None)
+                self.styles.pop(dev, None)
+                if not self.devices:
+                    self.ctl.set_pad_active(False)
                 self.sticks.pop(dev, None)
                 for k in [k for k in self.pressed if k[0] == dev]:
                     del self.pressed[k]
@@ -399,11 +477,14 @@ class GamepadBridge(QObject):
             elif kind == "button":
                 self.pressed[(dev, e[2])] = e[3]
                 if e[3]:
+                    self._used(dev)
                     self._edge(e[2])    # every physical press counts, even if already held elsewhere
             elif kind == "axis":
                 st = self.sticks.setdefault(dev, {})
                 st[e[2]] = e[3]
                 st["dir"] = self._stick_dir(st)
+                if st["dir"]:
+                    self._used(dev)
         now = self.clock()
         active = self._active_names()
         for name in list(self.held):
@@ -421,6 +502,18 @@ class GamepadBridge(QObject):
         if self.timer.interval() != want:
             self.timer.setInterval(want)
 
+    def _used(self, dev):
+        """A real press on a controller while one of our windows is active: pad mode."""
+        if QApplication.activeWindow() is None:
+            return
+        changed = dev != self.last_dev
+        self.last_dev = dev
+        self.ctl.note_pad()
+        if changed:
+            cb = getattr(self.ctl.win, "_on_pad_mode_changed", None)
+            if cb is not None:
+                cb()            # another controller type: other glyphs
+
     def _edge(self, name):
         if name in self.held and name in self.REPEATING:
             return
@@ -435,11 +528,20 @@ class GamepadBridge(QObject):
             return "inactive"
         key = self.KEYS[name]
         now = self.clock()
-        if now - self.ctl.last_real_key(key) < self.DEDUPE:
+        if key is not None and now - self.ctl.last_real_key(key) < self.DEDUPE:
             return "shadow"
-        self.last_sent[key] = now
+        if key is not None:
+            self.last_sent[key] = now
         if self.ctl.handle_input(key):
             return "reveal"
+        win = self.ctl.win
+        if (QApplication.activeWindow() is win and QApplication.activePopupWidget() is None
+                and QApplication.activeModalWidget() is None):
+            fn = getattr(win, "pad_edit_input", None)
+            if fn is not None and fn(name):
+                return "sent"           # edit mode: card / tile levels (padedit.py)
+        if key is None:
+            return "sent"               # X outside the edit mode: nothing to do
         if (name in ("lb", "rb") and QApplication.activeWindow() is self.ctl.win
                 and QApplication.activePopupWidget() is None
                 and self.ctl.win.nav_jump(-1 if name == "lb" else 1)):

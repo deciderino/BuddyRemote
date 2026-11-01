@@ -53,6 +53,7 @@ from platform_util import (acquire_lock, notify_running_instance, start_instance
 from theme import (touch_css, theme_palette, apply_app_theme, dialog_stylesheet, ui_colors,
                    accent_color, MONO_FAMILY)
 from gamepad import InputModeController, GamepadBridge
+from padedit import PadEdit, HintBar
 from dialogs import install_dialog_nav, fit_dialog_to_screen, notify, OptionsDialog, DownloadDialog
 import backend  # 1.3.1: custom CLI state, Buddy API mismatch, CLI update check
 
@@ -391,6 +392,7 @@ class HostRow(QFrame):
         self.editor.key_action.connect(lambda op: app.edit_key(hid, op))
         self.editor.focused.connect(lambda: app.edit_focus_card(hid))
         self.editor.drag_changed.connect(lambda on: app.edit_drag_state("tile" if on else None, self))
+        self.editor.anim.valueChanged.connect(app._pad_ring_update)     # controller focus ring follows
         bl.addWidget(self.editor)
         self.hidden_box = QWidget()
         self.hidden_box.setObjectName("hiddenStrip")
@@ -1187,6 +1189,8 @@ class UpdateToast(QFrame):
             title, detail = t("update_available", version=version), t("update_detail", current=APP_VERSION)
         else:
             title, detail = t("cli_update_title"), t("cli_update_detail", label=cli or "nightly")
+        if cli is not None:     # a newer CLI: not tested with BuddyRemote yet (link: release page)
+            detail += " " + t("cli_untested_update")
         self.title.setText("ℹ  " + title)
         self.detail.setText(detail)
         self.dl_btn.setText(t("update_download") if version else t("cli_release_page"))
@@ -1202,6 +1206,10 @@ class UpdateToast(QFrame):
         w = min(460, max(260, par.width() - 28))
         self.setFixedWidth(w)
         self.adjustSize()
+        lay = self.layout()                    # wrapped detail text: height for this width
+        if lay is not None and lay.hasHeightForWidth():
+            lay.activate()
+            self.resize(w, max(self.height(), lay.totalHeightForWidth(w)))
         bottom = getattr(par.window(), "_toast_base_bottom", lambda: par.height() - 14)()
         self.move(par.width() - w - 14, bottom - self.height())
 
@@ -1877,7 +1885,8 @@ class TilePreview(QWidget):
         if self.hasFocus() and not drag:
             win = self.window()
             im = getattr(win, "input_mode", None)
-            if im is None or im.nav_visible:
+            pe = getattr(win, "pad_edit", None)
+            if (im is None or im.nav_visible) and not (pe is not None and pe.active()):   # pad: PadRing
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.setPen(QPen(acc, 1, Qt.PenStyle.DotLine))
                 p.drawRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5))
@@ -3045,6 +3054,7 @@ class MainWindow(QMainWindow):
         # UI only: focus ring mouse/keyboard modes + native gamepad input (SDL2, optional)
         self.input_mode = InputModeController(self)
         self.gamepad = GamepadBridge(self.input_mode)
+        self.pad_edit = PadEdit(self, tile_text)       # controller edit mode (cards / tiles)
         QTimer.singleShot(0, self.gamepad.start)
 
         self.refresh_hosts()
@@ -3383,6 +3393,10 @@ class MainWindow(QMainWindow):
         # "✓ Fertig" is the ✎ item of the toolbar (always shown in edit mode): one Fertig only
         r1.addWidget(self.edit_icon, 0, Qt.AlignmentFlag.AlignTop)
         r1.addWidget(self.edit_info, 1)
+        self.edit_hints = HintBar(FlowLayout)       # controller mode: button hints (Variante B)
+        self.edit_hints.setMinimumHeight(48)
+        self.edit_hints.hide()
+        r1.addWidget(self.edit_hints, 1, Qt.AlignmentFlag.AlignVCenter)
         r1.addWidget(self.edit_undo_btn, 0, Qt.AlignmentFlag.AlignTop)
         r1.addWidget(self.edit_redo_btn, 0, Qt.AlignmentFlag.AlignTop)
         v.addLayout(r1)
@@ -3492,6 +3506,7 @@ class MainWindow(QMainWindow):
         self.edit_bar.show()
         self._apply_edit_bar_theme()
         self._update_state_lbl()
+        self.pad_edit.reset()
         self.refresh_hosts()
         self._sync_edit_bar()
         target = self._edit_hid
@@ -3500,6 +3515,7 @@ class MainWindow(QMainWindow):
     def exit_edit_mode(self):
         if not self._edit_mode:
             return
+        self.pad_edit.grab = None
         for r in self.host_rows.values():
             if r.editor is not None:
                 r.editor.cancel_drag()
@@ -3521,6 +3537,7 @@ class MainWindow(QMainWindow):
         self.tb_collapse_btn.setEnabled(True)
         self._edit_dim(False)
         self.edit_drag_state(None)
+        self.pad_edit.reset()
         self._tb_restyle()
         self.edit_bar.hide()
         self._apply_edit_bar_theme()
@@ -3562,6 +3579,10 @@ class MainWindow(QMainWindow):
             par = f.parentWidget()
             tl = w.mapTo(par, QPoint(0, 0))
             zone = QRect(tl, w.size()).adjusted(-pad, -pad, pad, pad).intersected(par.rect().adjusted(2, 2, -2, -2))
+        pe = getattr(self, "pad_edit", None)
+        if kind is None and pe is not None:
+            pe.on_drag_end()
+        self._sync_edit_bar()
         if zone is None:
             f.zone = None
             f.hide()
@@ -3569,7 +3590,8 @@ class MainWindow(QMainWindow):
             f.light = self._light()
             f.setGeometry(f.parentWidget().rect())
             f.zone = zone
-            hint = getattr(self, "edit_info", None)
+            hint = next((x for x in (getattr(self, "edit_hints", None), getattr(self, "edit_info", None))
+                         if x is not None and x.isVisible()), None)
             f.keep = (QRect(hint.mapTo(f.parentWidget(), QPoint(0, 0)), hint.size()).adjusted(-4, -4, 4, 4)
                       if hint is not None and hint.isVisible() else None)
             f.show()
@@ -3578,7 +3600,6 @@ class MainWindow(QMainWindow):
                 if d is not None:
                     d["ghost"].raise_()
             f.update()
-        self._sync_edit_bar()
 
     def _open_gap(self, lay, pos, size, horizontal):
         """Opens a gap of `size` px at layout index `pos` (None: closes it)."""
@@ -3587,6 +3608,8 @@ class MainWindow(QMainWindow):
             i = lay.indexOf(old)
             if i >= 0:
                 lay.takeAt(i)
+                if pos is not None and i < pos:     # pos was counted with the old gap in it
+                    pos -= 1
         if pos is None:
             return
         sp = QSpacerItem(size if horizontal else 0, 0 if horizontal else size,
@@ -3633,6 +3656,10 @@ class MainWindow(QMainWindow):
             if old and old != hid:
                 self._edit_sel = None
                 self._edit_rows_update(old)
+        pe = getattr(self, "pad_edit", None)
+        if pe is not None and self.host_rows.get(hid) is not None \
+                and QApplication.focusWidget() is self.host_rows[hid].editor:
+            pe.on_editor_focus(hid)
         if focus:
             self._focus_editor(hid)
         self._sync_edit_bar()
@@ -3657,9 +3684,29 @@ class MainWindow(QMainWindow):
         self._sync_edit_bar()
 
     def _pad_nav(self) -> bool:
-        """Controller connected and the focus ring is shown (not in mouse/touch mode)."""
+        """The app is being used with a controller right now: one is connected, it was
+        the last input (no mouse/keyboard/touch since) and the focus ring is shown."""
         im, pad = getattr(self, "input_mode", None), getattr(self, "gamepad", None)
-        return bool(im is not None and im.nav_visible and pad is not None and pad.devices)
+        return bool(im is not None and im.nav_visible and getattr(im, "pad_active", False)
+                    and pad is not None and pad.devices)
+
+    def pad_edit_input(self, name: str) -> bool:
+        """Controller button (or the key Steam Input sends for it) -> edit mode levels."""
+        pe = getattr(self, "pad_edit", None)
+        return bool(pe is not None and self._edit_mode and pe.handle(name))
+
+    def _on_pad_mode_changed(self):
+        """Controller <-> mouse/keyboard/touch: hints and focus ring on/off at once."""
+        pe = getattr(self, "pad_edit", None)
+        if pe is not None and not self._pad_nav():
+            pe.cancel_grab()
+        if self._edit_mode:
+            self._sync_edit_bar()
+
+    def _pad_ring_update(self, *_):
+        pe = getattr(self, "pad_edit", None)
+        if pe is not None:
+            pe.update_ring()
 
     def _sync_edit_bar(self):
         if not self._edit_mode:
@@ -3682,11 +3729,21 @@ class MainWindow(QMainWindow):
             hint = msg
         elif on or tb_sel:
             hint = t("edit_hint_selected")
-        elif self._pad_nav():
-            hint = t("edit_hint_pad")
         else:
             hint = t("edit_hint")
         self.edit_info.setText(hint)
+        pe = getattr(self, "pad_edit", None)
+        hints = getattr(self, "edit_hints", None)
+        if pe is not None and hints is not None:
+            if self._pad_nav():     # controller: what the buttons do now (no mouse texts)
+                where, items = pe.hints()
+                hints.set_state(where, items, self.gamepad.style(), self._light(),
+                                "" if drag else msg, _kind == "warn")
+                self.edit_info.hide()
+                hints.show()
+            else:
+                hints.hide()
+                self.edit_info.show()
         self.edit_size_btn.setEnabled(on or tb_sel)
         # the duplicate limit is reported with a toast when tried (no tooltip)
         self.edit_dup_btn.setEnabled(on and tiles.TYPES.get(a["typ"], {}).get("kind") == "action")
@@ -3704,6 +3761,8 @@ class MainWindow(QMainWindow):
             nxt = next((b for b in self.edit_tool_buttons + self.edit_top_buttons if self._navigable(b)), None)
             if nxt is not None:
                 nxt.setFocus(Qt.FocusReason.TabFocusReason)
+        if pe is not None:
+            pe.sync_visuals(self._light())
 
     # changes (saved at once, every step can be undone)
     def _edit_commit(self, hid, new, sel=..., msg: str = "", kind: str = "info"):
@@ -4753,6 +4812,8 @@ class MainWindow(QMainWindow):
                 self._probe_custom_cli()
             self._update_status_bar()
             hints = ([t("theme_restart")] if theme_changed else []) + ([t("language_restart")] if lang_changed else [])
+            if cli_changed and new.get("custom_cli"):
+                hints.append(t("cli_untested"))         # a newly chosen own CLI (toast, no popup)
             notify(self, t("settings_saved"), "\n".join(hints), kind="ok")
 
     def _make_tray_icon(self, online: bool) -> QIcon:
@@ -5113,7 +5174,7 @@ class MainWindow(QMainWindow):
                 r.set_current(visible and new is not None and r.isAncestorOf(new))
             except RuntimeError:
                 pass
-        if old is None and self._edit_mode:    # focus-ring mode switched: touch or controller hint
+        if self._edit_mode and (old is None or self._pad_nav()):    # ring mode switched / controller hints
             self._sync_edit_bar()
 
     # --- UI only: keyboard/controller navigation -------------------------
