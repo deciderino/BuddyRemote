@@ -13,6 +13,13 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 - **Controller button hints in the edit bar.** While a controller is used in edit mode, the edit bar shows where you are ("Cards:", "Gaming-PC › Tiles:", "Move “Wake”:" …) and what the buttons do right now, e.g. "A Edit tiles · X Grab card · B Done · LB/RB Switch row"; unavailable actions are greyed. The glyphs follow the controller type reported by SDL: PlayStation pads show ✕ ○ □ and L1/R1, all others (Xbox, Steam Deck, Switch, unknown) A B X and LB/RB. The hints disappear at once when the mouse moves (more than 4 px), is clicked or scrolled, the screen is touched or a real key is pressed (keys Steam Input sends together with a controller button do not count); normal mode shows no hints. Replaces the single "Controller: …" hint line. All 8 languages.
 - **Note for an own MoonDeck CLI.** Options › Files shows "Not tested with BuddyRemote – use at your own risk." under a chosen own CLI, the confirmation after saving one repeats it, and the toast about a newer MoonDeck CLI adds "The new CLI has not been tested with BuddyRemote yet." The toast keeps its link to the release page; nothing is downloaded automatically. All 8 languages.
 
+- **Smaller downloads.** The AppImage and the Windows ZIP no longer ship Qt parts BuddyRemote never uses: Qt's translations except `qtbase` for the 8 app languages, image-format plugins other than SVG and ICO, the eglfs/linuxfb/minimal/VNC/vkkhrdisplay platform plugins, the evdev/TUIO input plugins, the network-information plugins and the Qt TLS backends (HTTPS goes through Python's own SSL, not Qt). X11, Wayland and Windows platforms, the GTK3 and portal themes, input methods and the Windows style stay. AppImage 86.8 → 83.7 MB, Windows ZIP 44.6 → 41.6 MB. The app behaves exactly as before.
+- Code: dead helpers and three unused language keys removed; the Buddy status check builds its SSL context once instead of on every check (same settings); module loggers instead of the root logger outside the CLI pairing/wake/shutdown code; a `ruff.toml` (imports, bugbear, logging, RET503) and the code is clean under it.
+
+### Fixed (not yet in a preview)
+
+- **Dragging a card to the last place.** While a card was dragged towards the end of the list, the gap that shows where it will land could open one place further down than the drop position, because its position was counted with the old gap still in the layout. The gap now opens exactly where the card will drop.
+
 ### Changed (1.4-preview4)
 
 - Version 1.4-preview4 (GitHub pre-release like the earlier previews; the final 1.4 replaces it, 1.3.1 does not see it).
