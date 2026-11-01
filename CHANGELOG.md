@@ -9,6 +9,8 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 
 ### Changed (1.4-preview4)
 
+- Version 1.4-preview4 (GitHub pre-release like the earlier previews; the final 1.4 replaces it, 1.3.1 does not see it).
+
 - **Shorter reasons on greyed tiles.** The tooltip of an unavailable tile now only names the reason, without the "Not available:" prefix: "PC is already on", "PC is off or not reachable", "Buddy not reachable", "Update Buddy on the host", "Update BuddyRemote", "Buddy version does not match" (all 8 languages). A PC that is off no longer shows "Buddy is not reachable" on its Shut down/Restart/… tiles. Which tiles are greyed is unchanged.
 - **The window can be made narrower.** The minimum width now follows what is really shown: a card needs room for name, IP, ⚙ and the tiles it actually uses (empty tile columns no longer count); "▶ Steam running …" and the grey extras end in "…" instead of widening the card. The fixed lower limit went from 420 to 320 px (one card with one tile and a collapsed control bar: 363 px instead of 557 px). Normal and wide windows look exactly as before; edit mode keeps the full width.
 - **Short status bar in narrow windows.** When the full texts do not fit, the status bar shows "2/2 online", "⟳ 30 s" and "CLI ✓" (custom CLI: "CLI ⚠"); the full text is in the tooltip. The switch depends only on the window width, so it never flips back and forth during a status update. Buttons stay 48 px.
