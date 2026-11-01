@@ -71,6 +71,9 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(b.is_prerelease("1.4-preview4"))
         self.assertTrue(b.is_newer_version("1.4", "1.4-preview4"), "final release replaces preview4")
         self.assertFalse(b.is_newer_version("1.3.1", "1.4-preview4"))
+        self.assertTrue(b.is_prerelease("1.4-preview5"))
+        self.assertTrue(b.is_newer_version("1.4", "1.4-preview5"), "final release replaces preview5")
+        self.assertFalse(b.is_newer_version("1.3.1", "1.4-preview5"))
         # unchanged 1.3.1 behaviour
         self.assertTrue(b.is_newer_version("1.3.2", "1.3.1"))
         self.assertFalse(b.is_newer_version("1.3.1", "1.3.1"))
