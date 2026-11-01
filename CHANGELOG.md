@@ -7,6 +7,16 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 
 ## [Unreleased]
 
+### Changed (1.4-preview4)
+
+- **Shorter reasons on greyed tiles.** The tooltip of an unavailable tile now only names the reason, without the "Not available:" prefix: "PC is already on", "PC is off or not reachable", "Buddy not reachable", "Update Buddy on the host", "Update BuddyRemote", "Buddy version does not match" (all 8 languages). A PC that is off no longer shows "Buddy is not reachable" on its Shut down/Restart/… tiles. Which tiles are greyed is unchanged.
+- **The window can be made narrower.** The minimum width now follows what is really shown: a card needs room for name, IP, ⚙ and the tiles it actually uses (empty tile columns no longer count); "▶ Steam running …" and the grey extras end in "…" instead of widening the card. The fixed lower limit went from 420 to 320 px (one card with one tile and a collapsed control bar: 363 px instead of 557 px). Normal and wide windows look exactly as before; edit mode keeps the full width.
+- **Short status bar in narrow windows.** When the full texts do not fit, the status bar shows "2/2 online", "⟳ 30 s" and "CLI ✓" (custom CLI: "CLI ⚠"); the full text is in the tooltip. The switch depends only on the window width, so it never flips back and forth during a status update. Buttons stay 48 px.
+
+### Fixed (1.4-preview4)
+
+- Code: three unused exception variables (pyflakes warnings).
+
 ### Added (1.4-preview3)
 
 - **Optional GameStream auto-discovery in "Add host".** A new section "Auto-detect (optional)" with a "Search for GameStream hosts" button looks for PCs running Sunshine or Apollo in the local network (the bundled MoonDeck CLI's `host scan --dry --json`, about 3 s, IPv4) and then checks MoonDeck Buddy on each one with the port from the Buddy port field. Each result is one 48 px row (touch and controller): Buddy answers, Buddy not reachable (greyed but still selectable) or already added (disabled and skipped by the controller). Tapping a row only fills in name and IP; the MAC still comes from pairing. Up to three results are shown at once, more scroll, so the dialog fits 1280×800. While searching the button is greyed and says "Searching …"; if nothing is found or the search fails, a toast says so. The search is only in "Add host", not in the ⚙ connection settings. The CLI runs with `--dry` on a throw-away config path and never touches your settings; no console window on Windows.

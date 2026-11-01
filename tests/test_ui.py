@@ -601,7 +601,7 @@ class WakeStateTests(UiTestCase):
             self.assertEqual(b.isEnabled(), enabled, state)
             self.assertEqual(bool(b.property("primary")), primary, state)
             self.assertEqual(b.toolTip(), "" if enabled else app.t("why_pc_on"), state)
-        self.assertIn("PC ist bereits an", app.t("why_pc_on"))
+        self.assertEqual(app.t("why_pc_on"), "PC ist schon an")      # short, no "Nicht verfügbar:"
 
 
 class TooltipCleanupTests(UiTestCase):
@@ -1410,6 +1410,108 @@ class Release131Tests(UiTestCase):
         app.backend.set_custom_cli("")
         w._update_status_bar()
         self.assertTrue(w.cli_lbl.text().startswith("MoonDeck CLI"))
+
+
+class NarrowWindowTests(UiTestCase):
+    """1.4-preview4: shorter reasons, narrower minimum window, short status bar labels."""
+
+    def btn(self, hid, act):
+        return next(b for a, b in self.w.host_rows[hid].action_buttons if a == act)
+
+    def one_tile_window(self):
+        """Every host shows only "Wake" (1 small tile), toolbar collapsed, window as narrow as allowed."""
+        cfg = _config()
+        for h in cfg["hosts"]:
+            h["aktionen"] = [{"typ": "boot", "sichtbar": True, "groesse": "klein", "pos": [0, 0]}]
+            h["layout_rev"] = tiles.LAYOUT_REV
+        with open(os.path.join(TMP, "config.json"), "w") as fh:
+            json.dump(cfg, fh)
+        self.w.hide()
+        self.w.deleteLater()
+        pump()
+        self.w = app.MainWindow()
+        self.w.status_timer.stop()
+        self.w.check_status = lambda *a, **k: None
+        self.w.resize(1280, 800)
+        self.w.show()
+        self.w.set_toolbar_collapsed(True, animate=False, save=False)
+        pump()
+        return self.w
+
+    def test_short_reason_tooltips(self):
+        w = self.w
+        w.on_host_status("h0", READY)
+        pump()
+        self.assertEqual(self.btn("h0", "wake").toolTip(), "PC ist schon an")
+        w.on_host_status("h0", OFF)
+        pump()
+        self.assertEqual(self.btn("h0", "shutdown").toolTip(), "PC aus oder nicht erreichbar")
+        w.on_host_status("h0", WARN)
+        pump()
+        self.assertEqual(self.btn("h0", "shutdown").toolTip(), "Buddy nicht erreichbar")
+        for k in ("why_pc_on", "why_pc_off", "why_no_buddy", "why_mismatch_old", "why_mismatch_new",
+                  "why_mismatch_unknown"):
+            self.assertLessEqual(len(app.t(k)), 32, k)
+            self.assertNotIn("Nicht verfügbar", app.t(k))
+
+    def test_all_languages_have_new_keys(self):
+        lang_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lang")
+        files = [f for f in os.listdir(lang_dir) if f.endswith(".json")]
+        self.assertEqual(len(files), 8)
+        for f in files:
+            with open(os.path.join(lang_dir, f), encoding="utf-8") as fh:
+                d = json.load(fh)
+            for k in ("why_pc_off", "count_short", "refresh_short", "refresh_off_short"):
+                self.assertTrue(d.get(k), (f, k))
+            self.assertIn("{s}", d["refresh_short"], f)
+
+    def test_min_width_below_420(self):
+        w = self.one_tile_window()
+        w.resize(1, 1)
+        pump()
+        self.assertLess(w.minimumWidth(), 420)
+        self.assertGreaterEqual(w.minimumWidth(), app.MainWindow.MIN_W)
+        self.assertEqual(w.width(), w.minimumWidth())
+        for row in w.host_rows.values():            # name, IP and ⚙ stay fully visible
+            self.assertGreaterEqual(row.name_lbl.width(), row.name_lbl.minimumWidth())
+            self.assertEqual((row.conn_btn.width(), row.conn_btn.height()), (48, 48))
+            self.assertLessEqual(row.conn_btn.geometry().right(), row.width())
+        for b in w.toolbar_buttons:
+            self.assertEqual((b.width(), b.height()), (48, 48))
+
+    def test_status_bar_short_labels_with_tooltip(self):
+        w = self.one_tile_window()
+        full = (w.count_lbl.text(), w.refresh_lbl.text(), w.cli_lbl.text())
+        self.assertTrue(full[2].startswith("MoonDeck CLI"))
+        self.assertEqual(w.count_lbl.toolTip(), "")
+        w.resize(1, 1)
+        pump()
+        on = sum(1 for r in w.host_rows.values() if r.state == "online")
+        self.assertEqual(w.count_lbl.text(), app.t("count_short", n=3, online=on))
+        self.assertIn("⟳", w.refresh_lbl.text())
+        self.assertTrue(w.cli_lbl.text().startswith("CLI "))
+        self.assertEqual((w.count_lbl.toolTip(), w.refresh_lbl.toolTip(), w.cli_lbl.toolTip()), full)
+        fm = w.status_bar.fontMetrics()               # left state text not clipped
+        self.assertGreaterEqual(w.status_bar.width(), fm.horizontalAdvance(w.status_bar.text()))
+        for lbl in (w.count_lbl, w.refresh_lbl, w.cli_lbl):
+            self.assertGreaterEqual(lbl.width(), lbl.fontMetrics().horizontalAdvance(lbl.text()))
+        w.resize(1280, 800)
+        pump()
+        self.assertEqual((w.count_lbl.text(), w.refresh_lbl.text(), w.cli_lbl.text()), full)
+        self.assertEqual(w.count_lbl.toolTip(), "")
+
+    def test_compact_decision_is_stable(self):
+        """No flicker: the same width always gives the same texts, also after a status update."""
+        w = self.w
+        need = w._status_need(False)
+        for width in (need - 1, need, need - 1):
+            w.resize(width, 720)
+            pump()
+            texts = w.cli_lbl.text()
+            w._update_status_bar()
+            pump()
+            self.assertEqual(w.cli_lbl.text(), texts)
+            self.assertEqual(texts.startswith("MoonDeck"), w.width() >= need, width)
 
 
 if __name__ == "__main__":

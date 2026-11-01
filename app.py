@@ -249,8 +249,9 @@ class HostRow(QFrame):
                 w.setGraphicsEffect(eff)
         top.addWidget(self.name_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         top.addWidget(self.ip_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.steam_lbl = QLabel()
+        self.steam_lbl = ElidedLabel()
         self.steam_lbl.setObjectName("hostSteam")
+        self.steam_lbl.setMinimumWidth(1)   # narrow windows: ends in "…" instead of widening the card
         self.steam_lbl.hide()
         top.addSpacing(4)
         top.addWidget(self.steam_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -531,9 +532,17 @@ class HostRow(QFrame):
                 if tile["groesse"] == "gross":
                     w.setMinimumHeight(2 * w.sizeHint().height() + self.SPACING)
             col_min = max(col_min, -(-(need - (span - 1) * self.SPACING) // span))
+        self._col_min = col_min
+        used = self._used_cols()
         for c in range(tiles.COLS):
-            self.grid.setColumnMinimumWidth(c, col_min)
+            # columns right of the last tile may shrink to nothing (narrow windows);
+            # with room to spare all columns still get the same share (stretch 1 each)
+            self.grid.setColumnMinimumWidth(c, col_min if c < used else 0)
         self._lock_rows()
+
+    def _used_cols(self) -> int:
+        """Columns up to the right edge of the rightmost shown tile (at least 1)."""
+        return max([tile["pos"][0] + tiles.SIZES[tile["groesse"]][0] for _, tile in self._tiles] + [1])
 
     def _lock_rows(self):
         """QGridLayout gives a row without widgets zero height. Empty rows between or
@@ -558,12 +567,32 @@ class HostRow(QFrame):
                 + ip + 4 + steam + 60 + t1.spacing() + icons)
 
     def wide_width(self) -> int:
-        """Smallest width with every tile text readable (= also the minimum width)."""
+        """Width with all four columns and the whole header readable (cards in wide
+        windows are capped relative to this, see MainWindow._relayout_rows)."""
         self._lock_widths()
         m = self._root.contentsMargins()
         g = self.grid.contentsMargins()
         grid_w = g.left() + g.right() + tiles.COLS * self.grid.columnMinimumWidth(0) + (tiles.COLS - 1) * self.SPACING
         return m.left() + m.right() + max(self._line1_width(), grid_w)
+
+    def min_width(self) -> int:
+        """Smallest card width: every tile text readable in the used columns, and the
+        header with name, IP and ⚙ ("Steam läuft" and the grey extras end in "…")."""
+        self._lock_widths()
+        if self.editing:
+            return self.wide_width()
+        m = self._root.contentsMargins()
+        g = self.grid.contentsMargins()
+        used = self._used_cols()
+        grid_w = g.left() + g.right() + used * getattr(self, "_col_min", 0) + (used - 1) * self.SPACING
+        t1 = self._top
+        ip = (self.ip_lbl.sizeHint().width() + t1.spacing()) if self._show_ip() else 0
+        # independent of what the last check showed ("Steam läuft", problem line), so the
+        # minimum never changes with the status and the window does not jump
+        head = (self.dot.width() + t1.spacing() + self.name_lbl.minimumWidth() + t1.spacing()
+                + ip + t1.spacing() + self.ICON)
+        hint = self.hint_row.sizeHint().width()
+        return m.left() + m.right() + max(head, grid_w, hint)
 
     def min_card_height(self) -> int:
         self._lock_widths()
@@ -776,7 +805,8 @@ class HostRow(QFrame):
             elif act == "steam" and mm:
                 ok, why = False, self.mismatch_text(mm, "why")   # other actions stay clickable
             else:
-                ok, why = buddy, t("why_no_buddy")
+                # short reason only; which tiles are enabled does not depend on it
+                ok, why = buddy, t("why_no_buddy") if pc_on else t("why_pc_off")
             want[b] = ok
             if not b.property("pending"):
                 b.setToolTip("" if ok else why)  # tiles have no tooltip, only the reason when greyed out
@@ -2968,6 +2998,8 @@ class MainWindow(QMainWindow):
         # Status bar: current state (left: Bereit / Aktion läuft / Bearbeiten aktiv),
         # counts / auto refresh / CLI (right). Action feedback = toasts + log only.
         self.status_bar = QLabel(t("state_ready"))
+        self._sb_texts = {}         # key -> (full, short); see _apply_status_texts
+        self._sb_cli_tip = ""
         self.count_lbl = QLabel("")
         self.refresh_lbl = QLabel("")
         self.cli_lbl = QLabel("")
@@ -4465,7 +4497,7 @@ class MainWindow(QMainWindow):
             ip = host["ip"]
             pin = f"{random.randint(1000, 9999)}"
             self.log_output(f"Starting pairing with {ip}, PIN: {pin}")
-        except Exception as e:
+        except Exception:
             return
 
         # Pre-check: can we reach Buddy's API? (worker thread: up to 5 s, the GUI keeps running)
@@ -4519,7 +4551,7 @@ class MainWindow(QMainWindow):
             dlg.show()
             dlg.raise_()
             QApplication.processEvents()
-        except Exception as e:
+        except Exception:
             return
 
         result = {"done": False, "ok": False, "msg": "", "cancelled": False, "proc": None}
@@ -4565,7 +4597,7 @@ class MainWindow(QMainWindow):
                     else:
                         msg = result["msg"] or "Unknown error"
                         notify(self, t("pairing_failed"), msg[:500], kind="error")
-                except Exception as e:
+                except Exception:
                     logging.exception("Dialog error")
                 return
             QTimer.singleShot(500, check)
@@ -4820,6 +4852,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._apply_status_texts()
         if hasattr(self, "update_toast") and self.update_toast.isVisible():
             self.update_toast.place()
         if hasattr(self, "toast") and self.toast.isVisible():
@@ -4989,14 +5022,16 @@ class MainWindow(QMainWindow):
             return
         n = len(self.host_rows)
         on = sum(1 for r in self.host_rows.values() if r.state == "online")
-        self.count_lbl.setText(t("count_hosts", n=n, online=on))
+        self._sb_texts["count"] = (t("count_hosts", n=n, online=on), t("count_short", n=n, online=on))
+        self._apply_status_texts()
 
     def _update_status_bar(self):
         st = self.cfg.get("settings", {})
         if st.get("auto_status", True):
-            self.refresh_lbl.setText(t("auto_refresh_every", s=st.get("status_interval", 30)))
+            s = st.get("status_interval", 30)
+            self._sb_texts["refresh"] = (t("auto_refresh_every", s=s), t("refresh_short", s=s))
         else:
-            self.refresh_lbl.setText(t("auto_refresh_off"))
+            self._sb_texts["refresh"] = (t("auto_refresh_off"), t("refresh_off_short"))
         path = backend.custom_cli_path()
         if path:        # custom CLI chosen: always visible, also while it works
             state, reason = backend.custom_cli_state()
@@ -5004,12 +5039,49 @@ class MainWindow(QMainWindow):
             if state in ("failed", "missing"):
                 tip += "\n" + (t("cli_custom_failed") if state == "failed" else t("cli_custom_missing")) \
                     + (f" ({reason})" if reason else "")
-            self.cli_lbl.setText(t("cli_custom_status"))
-            self.cli_lbl.setToolTip(tip)
+            self._sb_texts["cli"] = (t("cli_custom_status"), "CLI ⚠")
+            self._sb_cli_tip = tip
         else:
-            self.cli_lbl.setText("MoonDeck CLI " + ("✓" if cli_available() else "✗"))
-            self.cli_lbl.setToolTip("")
+            mark = "✓" if cli_available() else "✗"
+            self._sb_texts["cli"] = ("MoonDeck CLI " + mark, "CLI " + mark)
+            self._sb_cli_tip = ""
         self._update_counts()
+
+    # --- UI only: status bar in narrow windows ---------------------------------------
+    def _sb_labels(self):
+        return {"count": self.count_lbl, "refresh": self.refresh_lbl, "cli": self.cli_lbl}
+
+    @staticmethod
+    def _label_w(lbl, text: str) -> int:
+        fm = lbl.fontMetrics()
+        return fm.horizontalAdvance(text) + (lbl.sizeHint().width() - fm.horizontalAdvance(lbl.text()))
+
+    def _status_need(self, compact: bool) -> int:
+        """Width the status bar needs: the longest left state text plus the right labels
+        (full or short). Only depends on texts, never on the current layout."""
+        left = max(self.status_bar.fontMetrics().horizontalAdvance(t(k))
+                   for k in ("state_ready", "state_working", "state_edit"))
+        labels = self._sb_labels()
+        right = sum(self._label_w(labels[k], v[1 if compact else 0]) for k, v in self._sb_texts.items())
+        return left + right + 60
+
+    def _apply_status_texts(self):
+        """Right-hand labels: full texts when they fit, otherwise short ones ("1/2 online",
+        "⟳ 30 s", "CLI ✓") with the full text as tooltip. Decided from the window width
+        alone, so resizing never flips back and forth."""
+        if not hasattr(self, "cli_lbl") or len(self._sb_texts) < 3:
+            return
+        compact = self.width() < self._status_need(False)
+        for k, lbl in self._sb_labels().items():
+            full, short = self._sb_texts[k]
+            text = short if compact else full
+            tip = full if compact else ""
+            if k == "cli" and self._sb_cli_tip:
+                tip = (full + "\n" + self._sb_cli_tip) if compact else self._sb_cli_tip
+            if lbl.text() != text:
+                lbl.setText(text)
+            if lbl.toolTip() != tip:
+                lbl.setToolTip(tip)
 
     def _set_log_visible(self, on: bool):
         self.output.setVisible(on)
@@ -5162,6 +5234,9 @@ class MainWindow(QMainWindow):
     # UI only: cards never get wider than this (wide/maximized windows keep the
     # buttons close to the host name; cards are centered).
     CARD_MAX_EXTRA = 200
+    # UI only: lower bound of the minimum window width (was 420 px up to 1.4-preview3);
+    # the real minimum comes from the cards, the toolbar and the short status bar
+    MIN_W = 320
 
     def _relayout_rows(self):
         """UI only: center the cards when the window is very wide."""
@@ -5185,9 +5260,9 @@ class MainWindow(QMainWindow):
         rows = list(self.host_rows.values())
         bm = self._body_layout.contentsMargins()
         chrome_w = bm.left() + bm.right() + 2 * self.scroll.frameWidth() + self.scroll.verticalScrollBar().sizeHint().width()
-        card_w = max([r.wide_width() for r in rows] + [0])
-        perm = sum(l.sizeHint().width() for l in (self.count_lbl, self.refresh_lbl, self.cli_lbl)) + 60
-        w = max(card_w + chrome_w, self.toolbar.minimumSizeHint().width(), perm, 420)
+        card_w = max([r.min_width() for r in rows] + [0])
+        perm = self._status_need(True) if len(self._sb_texts) == 3 else 0     # short labels
+        w = max(card_w + chrome_w, self.toolbar.minimumSizeHint().width(), perm, self.MIN_W)
         card_h = max([r.min_card_height() for r in rows] + [80])
         h = ((self.tb_grip.sizeHint().height() if self._tb_collapsed else self.toolbar.sizeHint().height())
              + (self.edit_bar.heightForWidth(w) if self._edit_mode and self.edit_bar.hasHeightForWidth()
