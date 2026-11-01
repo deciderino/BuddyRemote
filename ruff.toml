@@ -1,0 +1,30 @@
+# Lint config for BuddyRemote (ruff, https://docs.astral.sh/ruff/). Dev tool only, not
+# needed to run or build the app:  ruff check .
+target-version = "py310"
+line-length = 120          # informational; long lines (E501) are not checked
+extend-exclude = ["AppDir", "dist", "build", "cli"]
+
+[lint]
+select = [
+    "E4", "E7", "E9", "F",  # pyflakes + pycodestyle errors (ruff's defaults)
+    "W6",                   # deprecated syntax
+    "I",                    # import order
+    "B",                    # bugbear: likely bugs (mutable/call defaults, loop closures, ...)
+    "LOG",                  # logging: module loggers instead of the root logger
+    "RET503",               # explicit return where a function can return a value
+]
+ignore = [
+    "E701", "E702",  # one-line `if x: y` / `a; b` is the house style in compact UI code
+    "E731",          # small named lambdas are used for local helpers
+]
+
+[lint.per-file-ignores]
+# backend.py: the root-logger calls sit in the MoonDeck CLI subprocess code (pairing,
+# wake, shutdown); left unchanged on purpose.
+"backend.py" = ["LOG015"]
+# Tests put the repo on sys.path before importing app modules.
+"tests/*" = ["E402"]
+
+[lint.isort]
+known-first-party = ["app", "backend", "cacerts", "config", "dialogs", "gamepad", "i18n",
+                     "padedit", "paths", "platform_util", "theme", "tiles"]

@@ -5,12 +5,12 @@ BuddyRemote – Portable host control for MoonDeck Buddy
 
 import copy
 import json
+import logging
+import random
 import sys
 import threading
 import time
 import uuid
-import logging
-import random
 from pathlib import Path
 
 # Set process name so system monitor / KDE show "BuddyRemote" instead of python/app.py
@@ -23,39 +23,108 @@ if sys.platform.startswith("linux"):   # Windows: the exe name is BuddyRemote.ex
     except Exception:
         pass
 
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPoint,
+    QPointF,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+    QVariantAnimation,
+    pyqtSignal,
+)
+from PyQt6.QtGui import (
+    QActionGroup,
+    QColor,
+    QContextMenuEvent,
+    QDesktopServices,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QInputDevice,
+    QIntValidator,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPixmap,
+    QShortcut,
+)
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QFrame, QScrollArea, QDialog, QFormLayout,
-    QLineEdit, QMessageBox, QSystemTrayIcon, QMenu,
-    QTextEdit, QComboBox, QAbstractButton, QStatusBar, QBoxLayout, QSizePolicy,
+    QAbstractButton,
+    QApplication,
+    QBoxLayout,
+    QComboBox,
+    QDialog,
+    QFormLayout,
+    QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
-    QLayout, QToolTip, QSplitter, QSplitterHandle, QGraphicsOpacityEffect, QStyleOption, QStyle,
-    QSpacerItem
+    QHBoxLayout,
+    QLabel,
+    QLayout,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpacerItem,
+    QSplitter,
+    QSplitterHandle,
+    QStatusBar,
+    QStyle,
+    QStyleOption,
+    QSystemTrayIcon,
+    QTextEdit,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
 )
 
-import tiles    # host tiles: data model, templates, grid/collision logic (no Qt)
+import backend  # 1.3.1: custom CLI state, Buddy API mismatch, CLI update check
 import cacerts  # system CA store lookup for HTTPS to GitHub (no Qt, nothing bundled)
-from PyQt6.QtCore import (Qt, QTimer, pyqtSignal, QObject, QEvent, QSettings, QUrl,
-                          QRectF, QPointF, QPoint, QRect, QSize, QVariantAnimation, QEasingCurve,
-                          QPropertyAnimation)
-from PyQt6.QtGui import QIcon, QActionGroup, QColor, QPalette, QPixmap, QPainter, QPen, QShortcut, QKeySequence, QFontMetrics, QIntValidator, QDesktopServices, QFont, QInputDevice, QContextMenuEvent, QPainterPath
+import tiles  # host tiles: data model, templates, grid/collision logic (no Qt)
+from backend import (
+    check_buddy_api,
+    cli_available,
+    download_cli,
+    fetch_latest_release,
+    parse_steam_status,
+    ping_icmp,
+    release_is_update,
+    run_cli,
+)
+from config import ensure_client_id, load_config, save_config, seed_config, setup_logging
+from dialogs import DownloadDialog, OptionsDialog, fit_dialog_to_screen, install_dialog_nav, notify
+from gamepad import GamepadBridge, InputModeController
+from i18n import install_qt_translations, resolve_language, set_language, t
+from padedit import HintBar, PadEdit
 
 # split from app.py (1.3.1): version + paths, UI languages, config, backend (CLI/ping/Buddy/updates),
 # OS integration (single instance, autostart), theme, input modes + gamepad, dialogs
-from paths import (APP_VERSION, APP_DIR, PACKAGED, WINDOW_STATE_FILE, IS_WINDOWS, RES_DIR,
-                   prepare_packaged_dir)
-from i18n import resolve_language, set_language, install_qt_translations, t
-from config import load_config, save_config, seed_config, ensure_client_id, setup_logging
-from backend import (cli_available, run_cli, ping_icmp, check_buddy_api, parse_steam_status,
-                     fetch_latest_release, release_is_update, download_cli)
-from platform_util import (acquire_lock, notify_running_instance, start_instance_server, release_lock,
-                           set_autostart, set_windows_app_id)
-from theme import (touch_css, theme_palette, apply_app_theme, dialog_stylesheet, ui_colors,
-                   accent_color, MONO_FAMILY)
-from gamepad import InputModeController, GamepadBridge
-from padedit import PadEdit, HintBar
-from dialogs import install_dialog_nav, fit_dialog_to_screen, notify, OptionsDialog, DownloadDialog
-import backend  # 1.3.1: custom CLI state, Buddy API mismatch, CLI update check
+from paths import APP_DIR, APP_VERSION, IS_WINDOWS, PACKAGED, RES_DIR, WINDOW_STATE_FILE, prepare_packaged_dir
+from platform_util import (
+    acquire_lock,
+    notify_running_instance,
+    release_lock,
+    set_autostart,
+    set_windows_app_id,
+    start_instance_server,
+)
+from theme import MONO_FAMILY, accent_color, apply_app_theme, dialog_stylesheet, theme_palette, touch_css, ui_colors
+
+log = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 class Signals(QObject):
@@ -428,7 +497,8 @@ class HostRow(QFrame):
                 b.setProperty("hiddenTile", True)
                 b.setToolTip(t("tip_tile_show"))
                 b.setProperty("navKey", "show_" + x["typ"])
-                b.clicked.connect(lambda _, k=tiles.key(x): app.edit_show_tile(hid, k))
+                k = tiles.key(x)
+                b.clicked.connect(lambda _, k=k: app.edit_show_tile(hid, k))
                 b.installEventFilter(app)
                 self.hidden_flow.addWidget(b)
                 self.hidden_btns.append(b)
@@ -1454,14 +1524,16 @@ class TilePreview(QWidget):
 
     def mousePressEvent(self, ev):
         if not self.editable or ev.button() != Qt.MouseButton.LeftButton:
-            return super().mousePressEvent(ev)
+            super().mousePressEvent(ev)
+            return
         if self._begin_press(ev.position()):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         ev.accept()
 
     def mouseMoveEvent(self, ev):
         if not self.editable:
-            return super().mouseMoveEvent(ev)
+            super().mouseMoveEvent(ev)
+            return
         pt = ev.position()
         if self._press and not self._drag:
             if (pt - self._press[1]).manhattanLength() >= QApplication.startDragDistance():
@@ -1476,7 +1548,8 @@ class TilePreview(QWidget):
 
     def mouseReleaseEvent(self, ev):
         if not self.editable or ev.button() != Qt.MouseButton.LeftButton:
-            return super().mouseReleaseEvent(ev)
+            super().mouseReleaseEvent(ev)
+            return
         press, self._press = self._press, None
         if self._drag:
             self._finish_drag()
@@ -1487,7 +1560,8 @@ class TilePreview(QWidget):
 
     def contextMenuEvent(self, ev):
         if not self.editable or self._drag:
-            return super().contextMenuEvent(ev)
+            super().contextMenuEvent(ev)
+            return
         if (ev.reason() == QContextMenuEvent.Reason.Keyboard and self.selected
                 and tiles.find(self.tiles, self.selected) is not None):
             a = self.tiles[tiles.find(self.tiles, self.selected)]
@@ -1718,7 +1792,8 @@ class TilePreview(QWidget):
     # --- paint --------------------------------------------------------------------------
     def paintEvent(self, ev):
         if self.card:
-            return self._paint_card()
+            self._paint_card()
+            return
         c = ui_colors(self.light)
         acc = "#1565c0" if self.light else "#4fc3f7"
         bad = "#c62828" if self.light else "#e53935"
@@ -2138,7 +2213,7 @@ class HostDialog(QDialog):
             try:
                 box["r"] = backend.scan_gamestream(port)
             except Exception as e:
-                logging.exception("GameStream search")
+                log.exception("GameStream search")
                 box["r"] = (False, [], str(e))
         threading.Thread(target=worker, daemon=True).start()
         self._disc_timer.start()
@@ -2157,14 +2232,14 @@ class HostDialog(QDialog):
         self.search_btn.setEnabled(True)
         if not ok or not found:
             if not ok:
-                logging.warning("GameStream search failed: %s", err)
+                log.warning("GameStream search failed: %s", err)
             self.disc_state.setText(t("disc_hint"))
             self.toast.show_message(t("disc_none") if ok else t("disc_failed"),
                                     t("disc_none_detail") if ok else t("disc_failed_detail"),
                                     "info", self._light, 6000)
             self.search_btn.setFocus()
             return
-        logging.info("GameStream search: %d host(s) found", len(found))
+        log.info("GameStream search: %d host(s) found", len(found))
         known = self._known_hosts()
         for f in found:
             r = DiscoveryRow(f, backend.discovery_state(f, known), self._light)
@@ -2173,7 +2248,7 @@ class HostDialog(QDialog):
             self._nav_filter.register(r)
             self.disc_rows.append(r)
         chain = [self.search_btn] + [r for r in self.disc_rows if r.isEnabled()] + [self.save_btn]
-        for a, b in zip(chain, chain[1:]):
+        for a, b in zip(chain, chain[1:], strict=False):
             QWidget.setTabOrder(a, b)       # rows come right after the search button
         n = len(self.disc_rows)
         sp = self.disc_box.spacing()
@@ -4038,10 +4113,10 @@ class MainWindow(QMainWindow):
                             h["mac"] = mac
                             break
                     save_config(self.cfg)
-                    logging.info("MAC auto-saved: %s", mac)
+                    logging.info("MAC auto-saved: %s", mac)  # noqa: LOG015 (pairing flow: left unchanged)
                     QTimer.singleShot(0, lambda: notify(self, t("mac_updated", mac=mac)))
         except Exception:
-            logging.exception("Failed to fetch MAC")
+            logging.exception("Failed to fetch MAC")  # noqa: LOG015 (pairing flow: left unchanged)
 
     def remove_host(self, host: dict):
         """Remove a host (already confirmed in the edit dialog). The toast offers
@@ -4386,7 +4461,7 @@ class MainWindow(QMainWindow):
                 st.setValue("toolbar_collapsed", "true" if on else "false")
                 st.sync()
             except Exception:
-                logging.exception("window state save failed")
+                log.exception("window state save failed")
         if hasattr(self, "toast") and self.toast.isVisible():
             QTimer.singleShot(200, self.toast.place)
 
@@ -4445,7 +4520,7 @@ class MainWindow(QMainWindow):
             st.setValue("log_height", int(self._log_h))
             st.sync()
         except Exception:
-            logging.exception("window state save failed")
+            log.exception("window state save failed")
 
     def reset_log_height(self):
         """Double click on the divider: back to the default height."""
@@ -4648,7 +4723,7 @@ class MainWindow(QMainWindow):
                         msg = result["msg"] or "Unknown error"
                         notify(self, t("pairing_failed"), msg[:500], kind="error")
                 except Exception:
-                    logging.exception("Dialog error")
+                    log.exception("Dialog error")
                 return
             QTimer.singleShot(500, check)
 
@@ -4710,7 +4785,7 @@ class MainWindow(QMainWindow):
                     h, ["steam", "status", "--json", "--buddy-timeout", "2"], timeout=15)
                 res["steam"] = parse_steam_status(out) if rc == 0 else None
                 if rc != 0:
-                    logging.debug("steam status %s rc=%s %s", h.get("name"), rc, (err or out)[:200])
+                    log.debug("steam status %s rc=%s %s", h.get("name"), rc, (err or out)[:200])
                 mm = backend.api_mismatch(None, f"{out or ''}\n{err or ''}")
                 if mm:
                     res["steam"] = None
@@ -4718,9 +4793,9 @@ class MainWindow(QMainWindow):
                         mm["want"] = None       # the custom CLI's API is unknown to us
             res["api_mismatch"] = mm
         except Exception:
-            logging.exception("status check %s", h.get("name"))
+            log.exception("status check %s", h.get("name"))
         res["time"] = time.strftime("%H:%M:%S")
-        logging.info("Status %s: ping=%s buddy=%s steam=%s%s", h.get("name", h.get("ip")),
+        log.info("Status %s: ping=%s buddy=%s steam=%s%s", h.get("name", h.get("ip")),
                      res["ping"], res["buddy"], res["steam"],
                      f" api_mismatch={res['api_mismatch']}" if res.get("api_mismatch") else "")
         self.signals.host_status.emit(h["id"], res)
@@ -4837,7 +4912,7 @@ class MainWindow(QMainWindow):
         ts = datetime.now().strftime("%H:%M:%S")
         self.output.append(f"[{ts}] {text.rstrip()}")
         self.output.ensureCursorVisible()
-        logging.info(text.strip())
+        log.info(text.strip())
 
     def _show_attribution(self):
         QMessageBox.information(self, "BuddyRemote", t("attribution"))
@@ -4926,13 +5001,13 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 cert = cacerts.is_cert_problem(e)
                 no_ca = isinstance(getattr(e, "reason", e), cacerts.NoCAStoreError)
-                logging.warning("Update check failed (%s; CA store: %s): %r", "certificate problem"
+                log.warning("Update check failed (%s; CA store: %s): %r", "certificate problem"
                                 if cert else "connection problem", cacerts.describe(), e)
                 res = {"ok": False, "manual": manual, "error": str(e)[:300], "cert": cert, "no_ca": no_ca}
             try:        # the bundled CLI against the nightly asset (a custom CLI is not compared)
                 res["cli"] = backend.check_cli_update(timeout=10)
             except Exception as e:
-                logging.warning("MoonDeck CLI update check failed: %r", e)
+                log.warning("MoonDeck CLI update check failed: %r", e)
                 res["cli"] = {"ok": False, "error": str(e)[:300]}
             self.signals.update_result.emit(res)
         threading.Thread(target=worker, daemon=True).start()
@@ -5054,7 +5129,7 @@ class MainWindow(QMainWindow):
         if dlg is not None and hasattr(dlg, "_render_cli_block"):
             dlg._render_cli_block()
         if state in ("failed", "missing"):
-            logging.warning("custom MoonDeck CLI %s (%s): %s – using the bundled CLI", state, path, reason)
+            log.warning("custom MoonDeck CLI %s (%s): %s – using the bundled CLI", state, path, reason)
             if self._cli_toast_for == (state, path):
                 return
             self._cli_toast_for = (state, path)
@@ -5152,7 +5227,7 @@ class MainWindow(QMainWindow):
             st.setValue("log_visible", "true" if on else "false")
             st.sync()
         except Exception:
-            logging.exception("window state save failed")
+            log.exception("window state save failed")
 
     def _on_focus_changed(self, old, new):
         """Highlight the card that contains the keyboard focus (hidden in mouse mode)."""
@@ -5376,7 +5451,7 @@ class MainWindow(QMainWindow):
             st.setValue("geometry", self.saveGeometry())
             st.sync()
         except Exception:
-            logging.exception("window state save failed")
+            log.exception("window state save failed")
 
     def showEvent(self, event):
         super().showEvent(event)

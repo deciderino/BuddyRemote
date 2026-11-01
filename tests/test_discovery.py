@@ -13,8 +13,8 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import test_ui as U                                       # noqa: E402
-from test_ui import pump                                  # noqa: E402
+import test_ui as U  # noqa: E402
+from test_ui import pump  # noqa: E402
 
 setUpModule, tearDownModule = U.setUpModule, U.tearDownModule
 

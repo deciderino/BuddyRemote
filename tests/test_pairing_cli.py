@@ -10,8 +10,8 @@ The fake CLI is a shebang script: POSIX only (WinStopCliTests: Windows only).
     QT_QPA_PLATFORM=offscreen python3 -m unittest tests.test_pairing_cli -v
 """
 import ast
-import shutil
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -21,8 +21,8 @@ from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import test_ui as U                                       # noqa: E402
-from test_ui import setUpModule, tearDownModule, pump    # noqa: E402,F401
+import test_ui as U  # noqa: E402
+from test_ui import pump, setUpModule, tearDownModule  # noqa: E402,F401
 
 if U.HAVE_QT:
     from PyQt6.QtCore import QTimer
@@ -239,7 +239,7 @@ class PrecheckThreadTests(Base):
         while time.monotonic() - t0 < 2.8:
             pump(1)
         tm.stop()
-        gaps = [b - a for a, b in zip(ticks, ticks[1:])]
+        gaps = [b - a for a, b in zip(ticks, ticks[1:], strict=False)]
         self.assertTrue(gaps)
         self.assertLess(max(gaps), 0.5, "GUI event loop frozen during the Buddy pre-check")
         self.assertTrue(self.notes or any(isinstance(w, QMessageBox) and w.isVisible()

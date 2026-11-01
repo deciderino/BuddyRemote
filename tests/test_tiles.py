@@ -4,9 +4,9 @@
 import copy
 import json
 import os
+import random
 import sys
 import unittest
-import random
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import tiles  # noqa: E402
@@ -523,7 +523,7 @@ class ArrangeTests(unittest.TestCase):
     def test_hidden_untouched(self):
         ts = old("minimal")
         new = tiles.apply_preset(ts, "kompakt")
-        for a, b in zip(ts, new):
+        for a, b in zip(ts, new, strict=False):
             if not tiles.is_active(a):
                 self.assertEqual(a, b)
 

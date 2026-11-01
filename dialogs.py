@@ -5,17 +5,42 @@ import logging
 import os
 import sys
 from pathlib import Path
-from PyQt6.QtWidgets import (QApplication, QAbstractButton, QBoxLayout, QCheckBox, QComboBox, QDialog,
-                             QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpacerItem, QSpinBox,
-                             QVBoxLayout, QWidget)
-from PyQt6.QtCore import Qt, QObject, QEvent, QUrl
+
+from PyQt6.QtCore import QEvent, QObject, Qt, QUrl
 from PyQt6.QtGui import QCursor, QDesktopServices, QFont
-from paths import APP_VERSION, APP_DIR, RES_DIR, PACKAGED
-from i18n import LANGUAGES, LANGUAGE_NAMES, language_choice, t
-from config import load_config
+from PyQt6.QtWidgets import (
+    QAbstractButton,
+    QApplication,
+    QBoxLayout,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpacerItem,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
 import backend
-from theme import dialog_stylesheet, ui_colors, MONO_FAMILY
+from config import load_config
+from i18n import LANGUAGE_NAMES, LANGUAGES, language_choice, t
+from paths import APP_DIR, APP_VERSION, PACKAGED, RES_DIR
+from theme import MONO_FAMILY, dialog_stylesheet, ui_colors
+
+log = logging.getLogger(__name__)
 
 
 class _DialogNavFilter(QObject):
@@ -609,7 +634,7 @@ class OptionsDialog(QDialog):
         finally:
             QApplication.restoreOverrideCursor()
         if not ok:
-            logging.warning("custom MoonDeck CLI rejected (%s): %s", path, why)
+            log.warning("custom MoonDeck CLI rejected (%s): %s", path, why)
             self.cli_err.setText("⚠ " + t("cli_custom_rejected", reason=why))
             self.cli_err.show()
             return
@@ -707,7 +732,7 @@ class OptionsDialog(QDialog):
             self.data_dir_err.hide()
             self.data_dir_lbl.setStyleSheet(f"color: {self._sub_col}; font-size: 11px;")
         else:
-            logging.warning("could not open the data folder %s", APP_DIR)
+            log.warning("could not open the data folder %s", APP_DIR)
             self.data_dir_err.setText("⚠ " + t("data_dir_failed") + "\n" + t("data_dir_failed_hint"))
             self.data_dir_err.show()
             # the path stays selectable, in the error colour

@@ -9,12 +9,12 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import test_ui as U                                       # noqa: E402
-from test_ui import setUpModule, tearDownModule, pump    # noqa: E402,F401
-from test_touch_gamepad import FakePad                   # noqa: E402
+import test_ui as U  # noqa: E402
+from test_touch_gamepad import FakePad  # noqa: E402
+from test_ui import pump, setUpModule, tearDownModule  # noqa: E402,F401
 
-import gamepad                                           # noqa: E402
-import padedit                                           # noqa: E402
+import gamepad  # noqa: E402
+import padedit  # noqa: E402
 
 try:
     from PyQt6.QtCore import QPoint, Qt

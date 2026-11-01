@@ -6,8 +6,9 @@ import shutil
 import uuid
 
 import tiles
+from paths import CONFIG_FILE, LOG_FILE, SEED_CONFIG
 
-from paths import CONFIG_FILE, SEED_CONFIG, LOG_FILE
+log = logging.getLogger(__name__)
 
 
 def seed_config():
@@ -65,10 +66,10 @@ def load_config() -> dict:
             try:
                 save_config(data)
             except Exception:
-                logging.exception("config migration save failed")
+                log.exception("config migration save failed")
         return data
     except Exception:
-        logging.exception("config load failed")
+        log.exception("config load failed")
         return json.loads(json.dumps(DEFAULT_CONFIG))
 
 # numeric settings: key -> (fallback, minimum, maximum); the ranges of the settings dialog
@@ -87,7 +88,7 @@ def sanitize_config(data: dict) -> bool:
         changed = True
     hosts = [h for h in data["hosts"] if isinstance(h, dict)]
     if len(hosts) != len(data["hosts"]):
-        logging.warning("config: %d host entries without data dropped", len(data["hosts"]) - len(hosts))
+        log.warning("config: %d host entries without data dropped", len(data["hosts"]) - len(hosts))
         data["hosts"] = hosts
         changed = True
     used = {h.get("id") for h in hosts if isinstance(h.get("id"), str) and h.get("id")}
@@ -99,7 +100,7 @@ def sanitize_config(data: dict) -> bool:
                 new = uuid.uuid4().hex[:8]
             used.add(new)
             h["id"] = new
-            logging.warning("config: host %r got the id %s", h.get("name", ""), new)
+            log.warning("config: host %r got the id %s", h.get("name", ""), new)
             changed = True
     st = data["settings"]
     for k, (default, lo, hi) in NUMERIC_SETTINGS.items():

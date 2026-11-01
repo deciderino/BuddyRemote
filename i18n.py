@@ -2,7 +2,7 @@
 
 import json
 
-from PyQt6.QtCore import QTranslator, QLibraryInfo
+from PyQt6.QtCore import QLibraryInfo, QTranslator
 
 from paths import LANG_DIR
 

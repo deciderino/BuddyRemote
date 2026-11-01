@@ -10,14 +10,13 @@ The edit bar shows what the buttons do right now (glyphs of the controller used 
 A/B/X for Xbox, Switch, Steam Deck and unknown pads, cross/circle/square for
 PlayStation), only while the app is being used with a controller.  Pure UI: nothing
 here touches pairing, wake or shutdown."""
-from PyQt6.QtCore import Qt, QObject, QEvent, QPoint, QPointF, QRectF, QTimer
-from PyQt6.QtGui import QKeyEvent, QColor, QPainter, QPen, QFont, QFontMetrics, QPolygonF
-from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QHBoxLayout, QSizePolicy,
-                             QGraphicsOpacityEffect)
+from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, Qt, QTimer
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QPainter, QPen, QPolygonF
+from PyQt6.QtWidgets import QApplication, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 import tiles
 from i18n import t
-from theme import ui_colors, accent_color
+from theme import accent_color, ui_colors
 
 RING_W = 3                  # px, focus ring of the current card / tile
 DIM_OPACITY = 0.45          # the inactive level (other cards while editing tiles)

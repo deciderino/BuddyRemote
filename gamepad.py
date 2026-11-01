@@ -6,13 +6,13 @@ import logging
 import os
 import time
 
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QLineEdit, QAbstractSpinBox,
-                             QMessageBox, QPushButton)
-from PyQt6.QtCore import Qt, QTimer, QObject, QEvent
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QCursor, QKeyEvent
+from PyQt6.QtWidgets import QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QLineEdit, QMessageBox, QPushButton
 
 from paths import RES_DIR
 
+log = logging.getLogger(__name__)
 
 # UI only: input modes and native gamepad input.
 # Nothing here calls app logic directly: the gamepad is translated into the same
@@ -407,7 +407,7 @@ class GamepadBridge(QObject):
         except Exception as e:
             err = f"{e.__class__.__name__}: {e}"
         if err:
-            logging.info("Gamepad support disabled: %s", err)
+            log.info("Gamepad support disabled: %s", err)
             self.src = None
             return False
         self.timer.start(self.IDLE_MS)
@@ -456,7 +456,7 @@ class GamepadBridge(QObject):
         try:
             events = self.src.poll()
         except Exception:
-            logging.exception("gamepad poll failed; gamepad disabled")
+            log.exception("gamepad poll failed; gamepad disabled")
             self.stop()
             return
         for e in events:
@@ -464,7 +464,7 @@ class GamepadBridge(QObject):
             if kind == "added":
                 self.devices[dev] = e[2]
                 self.styles[dev] = e[3] if len(e) > 3 else pad_style(None, e[2])
-                logging.info("Gamepad connected: %s (%s)", e[2], self.styles[dev])
+                log.info("Gamepad connected: %s (%s)", e[2], self.styles[dev])
             elif kind == "removed":
                 self.devices.pop(dev, None)
                 self.styles.pop(dev, None)
@@ -473,7 +473,7 @@ class GamepadBridge(QObject):
                 self.sticks.pop(dev, None)
                 for k in [k for k in self.pressed if k[0] == dev]:
                     del self.pressed[k]
-                logging.info("Gamepad disconnected")
+                log.info("Gamepad disconnected")
             elif kind == "button":
                 self.pressed[(dev, e[2])] = e[3]
                 if e[3]:

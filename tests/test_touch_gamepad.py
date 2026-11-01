@@ -12,13 +12,13 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import test_ui as U                                       # noqa: E402
-from test_ui import setUpModule, tearDownModule, pump    # noqa: E402,F401
+import test_ui as U  # noqa: E402
+from test_ui import pump, setUpModule, tearDownModule  # noqa: E402,F401
 
 try:
     from PyQt6.QtCore import QPoint
     from PyQt6.QtWidgets import QApplication
-    from qt_touch import RealToucher, RealMouse
+    from qt_touch import RealMouse, RealToucher
     HAVE_TOUCH = True
 except Exception:          # no PyQt6, or not the Linux Qt build the helper calls into
     HAVE_TOUCH = False

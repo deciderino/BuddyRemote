@@ -9,8 +9,9 @@ from pathlib import Path
 from PyQt6.QtCore import QLockFile
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
-from paths import APP_DIR, PACKAGED, INSTANCE_LOCK
+from paths import APP_DIR, INSTANCE_LOCK, PACKAGED
 
+log = logging.getLogger(__name__)
 
 # Single instance: a QLockFile in APP_DIR (Qt detects stale locks of dead processes
 # itself) plus a QLocalServer, through which a second start asks the running
@@ -61,7 +62,7 @@ def start_instance_server(on_show) -> bool:
             c.disconnected.connect(c.deleteLater)
     server.newConnection.connect(_on_conn)
     if not server.listen(name):
-        logging.warning("Single instance server failed: %s", server.errorString())
+        log.warning("Single instance server failed: %s", server.errorString())
         return False
     _instance_server = server
     return True
@@ -134,4 +135,4 @@ def set_windows_app_id():
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("BuddyRemote.BuddyRemote")
     except Exception as e:      # cosmetic only
-        logging.debug("AppUserModelID not set: %r", e)
+        log.debug("AppUserModelID not set: %r", e)

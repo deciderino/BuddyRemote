@@ -14,10 +14,9 @@ import urllib.request
 from pathlib import Path
 
 import cacerts  # system CA store lookup for HTTPS to GitHub (no Qt, nothing bundled)
-
-from paths import APP_VERSION, APP_DIR, PACKAGED, CONFIG_FILE, CLI_DIR, BUNDLED_DIR, CLI_BIN
-from i18n import t
 from config import load_config, save_config
+from i18n import t
+from paths import APP_DIR, APP_VERSION, BUNDLED_DIR, CLI_BIN, CLI_DIR, CONFIG_FILE, PACKAGED
 
 
 def bundled_cli_info() -> dict | None:

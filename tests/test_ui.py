@@ -834,7 +834,7 @@ class Redesign3Tests(UiTestCase):
         w = self.w
         dlg = app.OptionsDialog(w.cfg["settings"], w)
         try:
-            texts = [l.text() for l in dlg.findChildren(app.QLabel)]
+            texts = [lb.text() for lb in dlg.findChildren(app.QLabel)]
             for k in ("sec_display", "sec_behavior", "sec_updates", "sec_files"):
                 self.assertTrue(any(app.t(k) in x for x in texts), k)
             self.assertEqual(dlg.data_dir_lbl.text(), str(app.APP_DIR))

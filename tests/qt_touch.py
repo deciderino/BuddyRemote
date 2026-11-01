@@ -2,11 +2,14 @@
 Calls the exported Qt C++ entry points QTest::createTouchDevice and qt_handleTouchEventv2
 (the same functions C++ QTest::touchEvent uses) via ctypes, so events travel
 QWindowSystemInterface -> QGuiApplication (point grabs, mouse synthesis) -> QWidgetWindow."""
-import ctypes, glob, os
+import ctypes
+import glob
+import os
+
 import PyQt6
 from PyQt6 import sip
-from PyQt6.QtCore import QPointF, Qt
-from PyQt6.QtGui import QPointingDevice, QEventPoint
+from PyQt6.QtCore import QPointF
+from PyQt6.QtGui import QEventPoint, QPointingDevice
 
 _lib = ctypes.CDLL(glob.glob(os.path.join(os.path.dirname(PyQt6.__file__), "Qt6/lib/libQt6Gui.so.6"))[0])
 # (raises on other platforms / Qt builds: the importing test then skips)
