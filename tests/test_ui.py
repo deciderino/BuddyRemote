@@ -271,7 +271,7 @@ class CalmStatusTests(UiTestCase):
         revision; the status tiles are hidden by default in both."""
         for hid in ("h0", "h1"):
             ts = self.host(hid)["aktionen"]
-            for typ in tiles.STATUS_TYPES:
+            for typ in ("online_status",):   # the calm status tile
                 self.assertFalse(ts[tiles.find(ts, typ)]["sichtbar"], (hid, typ))
             self.assertEqual(self.host(hid)["layout_rev"], tiles.LAYOUT_REV)
         self.assertFalse(self.w.host_rows["h0"].chip_online.isVisible())
@@ -433,7 +433,7 @@ class LogSplitterTests(UiTestCase):
         self.assertIsInstance(w.splitter, app.QSplitter)
         self.assertGreaterEqual(w.splitter.handleWidth(), 8)
         self.assertFalse(w.log_handle.resizable, "log closed: nothing to resize")
-        self.assertFalse(w.log_handle.grip_visible(), "log closed: no grip")
+        self.assertFalse(w.log_handle.resizable and w.log_handle.isVisible(), "log closed: no grip")
         self.assertTrue(w.log_btn.isVisible(), "the log button sits in the handle row")
         self.assertIs(w.log_btn.parentWidget(), w.log_handle)
 
@@ -442,7 +442,7 @@ class LogSplitterTests(UiTestCase):
         w.toggle_log()
         pump()
         self.assertTrue(w.log_handle.resizable)
-        self.assertTrue(w.log_handle.grip_visible())
+        self.assertTrue(w.log_handle.resizable and w.log_handle.isVisible(), "grip painted")
         self.assertGreaterEqual(w.log_handle.height(), 48, "48 px touch row")
         w.splitter.moveSplitter(w.splitter.handle(1).y() - 120, 1)
         pump()
@@ -471,13 +471,36 @@ class LogSplitterTests(UiTestCase):
     def test_small_and_large_window(self):
         w = self.w
         w.toggle_log()
-        w.set_log_height(400)
+        w._log_h = 400
+        w._apply_log_height()
         for size in ((w.minimumWidth(), w.minimumHeight()), (1600, 1200), (900, 720)):
             w.resize(*size)
             pump()
             self.assertTrue(w.output.isVisible())
             self.assertGreaterEqual(w.output.height(), app.MainWindow.LOG_MIN - 2, size)
             self.assertGreater(w.scroll.height(), 40, size)
+
+
+class AnalysisCleanupTests(UiTestCase):
+    """1.4 cleanup (analysis items 2/3): behaviour stays the same."""
+
+    def test_viewport_watcher_alive_without_attribute(self):
+        import gc
+        gc.collect()
+        vp = self.w.scroll.viewport()
+        watchers = [c for c in vp.children() if isinstance(c, app._ResizeWatcher)]
+        self.assertEqual(len(watchers), 1, "the Python watcher (eventFilter) is kept by its Qt parent")
+
+    def test_buddy_ssl_context_built_once(self):
+        import ssl
+        be = app.backend
+        a, b = be._buddy_ssl_context(), be._buddy_ssl_context()
+        self.assertIs(a, b)
+        self.assertFalse(a.check_hostname)
+        self.assertEqual(a.verify_mode, ssl.CERT_NONE)
+        ok, msg = be.check_buddy_api("127.0.0.1", 9, timeout=0.5)   # nothing listens: refused
+        self.assertFalse(ok)
+        self.assertIs(be._buddy_ssl_context(), a)
 
 
 class ToolbarTests(UiTestCase):
@@ -1338,10 +1361,11 @@ class Release131Tests(UiTestCase):
         self.assertTrue(dlg.update_btn.isEnabled())
         from PyQt6.QtGui import QResizeEvent
         boxes = dlg.upd_boxes
+        from PyQt6.QtWidgets import QBoxLayout
         boxes.resizeEvent(QResizeEvent(app.QSize(500, 200), boxes.size()))   # narrow: stacked
-        self.assertTrue(boxes.stacked())
+        self.assertEqual(boxes.lay.direction(), QBoxLayout.Direction.TopToBottom)
         boxes.resizeEvent(QResizeEvent(app.QSize(800, 200), boxes.size()))
-        self.assertFalse(boxes.stacked())
+        self.assertEqual(boxes.lay.direction(), QBoxLayout.Direction.LeftToRight)
 
     @unittest.skipIf(sys.platform == "win32", "the fake CLIs are shell scripts")
     def test_options_cli_bundled_pick_reject_and_back(self):

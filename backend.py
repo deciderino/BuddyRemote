@@ -28,16 +28,6 @@ def bundled_cli_info() -> dict | None:
         return None
     return d if isinstance(d, dict) else None
 
-def bundled_cli_text() -> str:
-    info = bundled_cli_info() or {}
-    ver = str(info.get("version") or "").strip()
-    commit = str(info.get("commit") or "").strip()[:7]
-    if ver and commit:
-        return t("cli_bundled_full", version=ver, commit=commit)
-    if ver:
-        return t("cli_bundled_ver", version=ver)
-    return t("cli_bundled")
-
 def bundled_cli_label() -> str:
     """Short label of the bundled CLI for the 1.3.1 UI: 'nightly 00f8c31' (packaged), 'nightly'
     (source mode / no version file)."""
@@ -451,12 +441,26 @@ def api_mismatch(host_api: int | None, cli_output: str = "", want: int | None = 
         return {"host": None, "want": want, "dir": "unknown"}
     return None
 
+_buddy_ctx = None
+_buddy_ctx_lock = threading.Lock()
+
+def _buddy_ssl_context():
+    """The SSL context for the Buddy check (self-signed cert: no hostname / cert check),
+    built once on first use and shared by all status threads (an SSLContext is safe to
+    share; building one costs ~6 ms, which used to happen on every check)."""
+    global _buddy_ctx
+    with _buddy_ctx_lock:
+        if _buddy_ctx is None:
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            _buddy_ctx = ctx
+        return _buddy_ctx
+
 def check_buddy_api(ip: str, port: int = 59999, timeout=5.0) -> tuple[bool, str]:
     """Direct HTTPS check to Buddy, ignoring self-signed cert. Returns (ok, message)."""
-    import ssl
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx = _buddy_ssl_context()
     url = f"https://{ip}:{port}/apiVersion"
     try:
         req = urllib.request.Request(url)

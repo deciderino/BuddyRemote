@@ -57,8 +57,6 @@ def _t(typ, size, col, row, visible=True):
     return {"typ": typ, "sichtbar": visible, "groesse": size, "pos": [col, row]}
 
 
-STATUS_TYPES = ("online_status",)
-
 # Templates. Every template lists every known type, so nothing is ever lost:
 # what a template does not need is hidden, not deleted.
 # Layout revision 2 ("calm status"): the status lives in the card header (dot, tooltip,

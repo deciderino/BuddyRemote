@@ -2777,10 +2777,6 @@ class _LogHandle(QSplitterHandle):
         self.setCursor(Qt.CursorShape.SplitVCursor if on else Qt.CursorShape.ArrowCursor)
         self.update()
 
-    def grip_visible(self) -> bool:
-        """The grip is painted only while the log is open (tests, screenshots)."""
-        return self.resizable and self.isVisible()
-
     def sizeHint(self):
         s = super().sizeHint()
         return QSize(s.width(), self.HEIGHT)
@@ -2963,7 +2959,7 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.host_widget)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # rows wrap instead
         self.scroll = scroll
-        self._vp_watch = _ResizeWatcher(scroll.viewport(), self._relayout_rows)
+        _ResizeWatcher(scroll.viewport(), self._relayout_rows)   # owned by the viewport
         self.card_drag.scroll = scroll
         self._apply_host_area_theme()
 
@@ -4454,11 +4450,6 @@ class MainWindow(QMainWindow):
     def reset_log_height(self):
         """Double click on the divider: back to the default height."""
         self._log_h = self.LOG_DEFAULT
-        self._apply_log_height()
-        self._save_log_height()
-
-    def set_log_height(self, h: int):
-        self._log_h = max(self.LOG_MIN, int(h))
         self._apply_log_height()
         self._save_log_height()
 

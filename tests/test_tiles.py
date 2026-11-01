@@ -90,7 +90,7 @@ class Templates(unittest.TestCase):
 
     def test_template_contents(self):
         vis = lambda n: {a["typ"] for a in tiles.TEMPLATES[n] if a["sichtbar"]}
-        status = set(tiles.STATUS_TYPES)
+        status = {"online_status"}   # the calm status tile
         self.assertEqual(vis("minimal"), {"boot", "shutdown"})
         self.assertFalse(vis("server") & {"steam_status", "steam_start_stop"})
         self.assertEqual(vis("server"), {"boot", "neustart", "shutdown"})
@@ -679,7 +679,6 @@ class SteamStatusRemovedTests(unittest.TestCase):
     def test_type_gone(self):
         self.assertNotIn("steam_status", tiles.TYPES)
         self.assertNotIn("steam_status", tiles.TYPE_ORDER)
-        self.assertEqual(tiles.STATUS_TYPES, ("online_status",))
         for name, ts in tiles.TEMPLATES.items():
             self.assertFalse(any(a["typ"] == "steam_status" for a in ts), name)
 

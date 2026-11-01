@@ -313,9 +313,6 @@ class _UpdBoxes(QWidget):
         if self.lay.direction() != d:
             self.lay.setDirection(d)
 
-    def stacked(self) -> bool:
-        return self.lay.direction() == QBoxLayout.Direction.TopToBottom
-
 
 def _link_button(text: str, cc: dict) -> QPushButton:
     b = QPushButton(text)
@@ -433,7 +430,6 @@ class OptionsDialog(QDialog):
         self.upd_cli_link = gc.full(_link_button(t("upd_cli_manage"), cc))
         self.upd_cli_link.clicked.connect(self._goto_cli_block)
         gc.done()
-        self.upd_groups = (ga, gc)
         self.upd_boxes = _UpdBoxes(ga, gc)
         layout.addRow(self.upd_boxes)
         self.update_btn = QPushButton(t("check_updates_now"))
