@@ -28,7 +28,7 @@ def bundled_cli_info() -> dict | None:
     return d if isinstance(d, dict) else None
 
 def bundled_cli_label() -> str:
-    """Short label of the bundled CLI for the 1.3.1 UI: 'nightly 00f8c31' (packaged), 'nightly'
+    """Short label of the bundled CLI for the 1.3.1 UI: 'nightly de3f5e4' (packaged), 'nightly'
     (source mode / no version file)."""
     info = bundled_cli_info() or {}
     ver = str(info.get("version") or "").strip() or "nightly"
@@ -561,8 +561,8 @@ def discovery_state(found: dict, hosts: list) -> str:
 
 
 # --- MoonDeck CLI release (nightly) -------------------------------------------------
-CLI_RELEASE_API = "https://api.github.com/repos/FrogTheFrog/moondeck/releases/tags/nightly"
-CLI_RELEASE_PAGE = "https://github.com/FrogTheFrog/moondeck/releases/tag/nightly"
+CLI_RELEASE_API = "https://api.github.com/repos/MoonDeckTeam/moondeck/releases/tags/nightly"
+CLI_RELEASE_PAGE = "https://github.com/MoonDeckTeam/moondeck/releases/tag/nightly"
 
 def cli_asset_name(platform: str = sys.platform) -> str:
     """Release asset of the MoonDeck CLI for this OS."""
@@ -656,9 +656,9 @@ def download_cli(progress_cb=None) -> bool:
     """Download and verify the MoonDeck CLI binary. Returns True on success."""
     CLI_RELEASE = "nightly"
     ASSET = cli_asset_name()
-    CLI_URL = f"https://github.com/FrogTheFrog/moondeck/releases/download/{CLI_RELEASE}/{ASSET}"
-    API_URL = f"https://api.github.com/repos/FrogTheFrog/moondeck/releases/tags/{CLI_RELEASE}"
-    SOURCE = "github.com/FrogTheFrog/moondeck"
+    CLI_URL = f"https://github.com/MoonDeckTeam/moondeck/releases/download/{CLI_RELEASE}/{ASSET}"
+    API_URL = f"https://api.github.com/repos/MoonDeckTeam/moondeck/releases/tags/{CLI_RELEASE}"
+    SOURCE = "github.com/MoonDeckTeam/moondeck"
 
     CLI_DIR.mkdir(parents=True, exist_ok=True)
     dest = CLI_BIN                       # source mode: CLI_DIR / "moondeck-cli"

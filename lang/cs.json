@@ -66,7 +66,7 @@
   "tray_quit": "Ukončit",
   "tray_no_hosts": "(žádní hostitelé)",
   "pair_now": "Spárovat nyní s tímto hostitelem?",
-  "attribution": "Tato aplikace používá MoonDeck CLI od FrogTheFrog.\n\nhttps://github.com/FrogTheFrog/moondeck\n\nDěkujeme za skvělou práci!",
+  "attribution": "Tato aplikace používá MoonDeck CLI od FrogTheFrog.\n\nhttps://github.com/MoonDeckTeam/moondeck\n\nDěkujeme za skvělou práci!",
   "running_in_background": "Běží na pozadí",
   "cli_download_failed": "MoonDeck CLI se nepodařilo stáhnout.\nZkontrolujte připojení k internetu a zkuste to znovu.",
   "app_version": "Verze:",

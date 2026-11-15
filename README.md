@@ -6,7 +6,7 @@
 
 **Simple remote PC control. No complicated setup.**
 
-A lightweight, free and open-source **Linux GUI** for controlling **Windows and Linux PCs** on your home network via [MoonDeck Buddy](https://github.com/FrogTheFrog/moondeck-buddy).
+A lightweight, free and open-source **GUI for Linux and Windows** for controlling **Windows and Linux PCs** on your home network via [MoonDeck Buddy](https://github.com/MoonDeckTeam/moondeck-buddy).
 
 [**Download the latest release**](https://github.com/deciderino/BuddyRemote/releases) · [Manual](docs/MANUAL.md) · [Report an issue](https://github.com/deciderino/BuddyRemote/issues)
 
@@ -16,7 +16,7 @@ A lightweight, free and open-source **Linux GUI** for controlling **Windows and 
 
 ## What is BuddyRemote?
 
-BuddyRemote lets you **wake, shut down, restart, suspend, or hibernate** your PCs from a simple graphical interface on Linux. It **starts Steam on the host and closes it again with the same tile.**
+BuddyRemote lets you **wake, shut down, restart, suspend, or hibernate** your PCs from a simple graphical interface on Linux or Windows. It **starts Steam on the host and closes it again with the same tile.**
 
 It was made for **Linux HTPCs, Steam Deck Desktop Mode, and home game streaming setups**, but you don't need a game streaming session to use it. Power controls work independently of Steam, Sunshine, Apollo, and Moonlight, as long as MoonDeck Buddy is available on the host.
 
@@ -60,16 +60,18 @@ Press ✎ and drag a tile: the other tiles make room. Tiles you don't need are h
 
 ## Getting started
 
-**1. Set up MoonDeck Buddy on the host.** Install [MoonDeck Buddy](https://github.com/FrogTheFrog/moondeck-buddy) on the PC you want to control.
+**1. Set up MoonDeck Buddy on the host.** Install [MoonDeck Buddy](https://github.com/MoonDeckTeam/moondeck-buddy) on the PC you want to control.
 
-**2. Download BuddyRemote.** Get `BuddyRemote-x86_64.AppImage` from [GitHub Releases](https://github.com/deciderino/BuddyRemote/releases) on your **Linux client**.
+**2. Download BuddyRemote.** Get `BuddyRemote-x86_64.AppImage` (Linux, Steam Deck) or `BuddyRemote-Windows-x86_64.zip` (Windows 10/11 x64) from [GitHub Releases](https://github.com/deciderino/BuddyRemote/releases).
 
-**3. Run it.**
+**3. Run it.** On Linux:
 
 ```bash
 chmod +x BuddyRemote-x86_64.AppImage
 ./BuddyRemote-x86_64.AppImage
 ```
+
+On Windows, unzip the whole ZIP to a permanent folder and start `BuddyRemote\BuddyRemote.exe`.
 
 Everything is bundled, including the MoonDeck CLI. You can switch to your own MoonDeck CLI in Settings → Files; the update check also tells you when a newer CLI is out, and a host card warns you when the MoonDeck Buddy version doesn't match.
 
@@ -85,7 +87,7 @@ Requirements, running from source, host setup tips, all settings and shortcuts a
 
 ## Thanks to MoonDeck
 
-BuddyRemote would not exist without [MoonDeck](https://github.com/FrogTheFrog/moondeck) and [MoonDeck Buddy](https://github.com/FrogTheFrog/moondeck-buddy) by **FrogTheFrog**. MoonDeck Buddy does the real work on the host; BuddyRemote is just a small Linux interface for it. Thank you!
+BuddyRemote would not exist without [MoonDeck](https://github.com/MoonDeckTeam/moondeck) and [MoonDeck Buddy](https://github.com/MoonDeckTeam/moondeck-buddy) by **FrogTheFrog**. MoonDeck Buddy does the real work on the host; BuddyRemote is just a small Linux interface for it. Thank you!
 
 ## Built with AI, driven by an idea
 
@@ -95,11 +97,11 @@ I use a small Linux mini-PC as an HTPC in my living room and wanted a small GUI 
 
 ## Free & open source
 
-BuddyRemote **1.3** is a small personal open-source project, licensed under the **GNU General Public License v3.0** (see [`LICENSE`](LICENSE)). Suggestions, bug reports, contributions, and compatibility feedback are welcome. It has been **tested on Bazzite Linux**; reports from other distributions are welcome.
+BuddyRemote **1.4** is a small personal open-source project, licensed under the **GNU General Public License v3.0** (see [`LICENSE`](LICENSE)). Suggestions, bug reports, contributions, and compatibility feedback are welcome. It has been **tested on Bazzite Linux**; reports from other distributions are welcome.
 
-A **Windows client** is planned.
+Since 1.4 there is also a **Windows version** (Windows 10/11 x64, a ZIP with a folder you unpack).
 
-The AppImage bundles the MoonDeck CLI, Qt 6, PyQt6, Python, SDL2 and a few small libraries, each under its own license. See [Third-party licenses](docs/MANUAL.md#third-party-licenses) in the manual.
+The AppImage and the Windows ZIP bundle the MoonDeck CLI, Qt 6, PyQt6, Python, SDL2 and a few small libraries, each under its own license. See [Third-party licenses](docs/MANUAL.md#third-party-licenses) in the manual.
 
 **The goal stays the same: keep it lightweight, easy to install, and easy to use.**
 

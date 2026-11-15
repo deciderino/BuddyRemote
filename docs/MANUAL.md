@@ -21,7 +21,7 @@ This manual covers BuddyRemote **1.3.1** in detail. For a short overview, see th
 ## Requirements
 
 - **Client:** 64-bit (x86_64) Linux with glibc **2.34+** for the AppImage (e.g. Ubuntu 22.04+, Fedora 35+, Bazzite, SteamOS 3). Running from source needs Python **3.10+** with working `venv` support instead.
-- **Host:** Windows or Linux with **[MoonDeck Buddy](https://github.com/FrogTheFrog/moondeck-buddy)** installed.
+- **Host:** Windows or Linux with **[MoonDeck Buddy](https://github.com/MoonDeckTeam/moondeck-buddy)** installed.
 - Both devices connected to a **trusted local network**.
 - Wake-on-LAN supported and enabled on the host if you want remote wake-up.
 
@@ -263,7 +263,7 @@ The AppImage bundles the following components unmodified, each under its own lic
 
 | Component | Used for | License |
 | --- | --- | --- |
-| [MoonDeck CLI](https://github.com/FrogTheFrog/moondeck) (by FrogTheFrog) | Talking to MoonDeck Buddy: pairing, power and Steam commands | GPL-3.0 |
+| [MoonDeck CLI](https://github.com/MoonDeckTeam/moondeck) (by FrogTheFrog) | Talking to MoonDeck Buddy: pairing, power and Steam commands | GPL-3.0 |
 | [Qt 6](https://www.qt.io/) | GUI toolkit | LGPL-3.0 |
 | [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) and PyQt6-sip | Python bindings for Qt | GPL-3.0 / BSD-2-Clause |
 | [ICU 73.2](https://icu.unicode.org/) (bundled with Qt) | Unicode and language support | Unicode License (ICU) |
@@ -271,7 +271,7 @@ The AppImage bundles the following components unmodified, each under its own lic
 | [SDL2](https://www.libsdl.org/) and [PySDL2](https://github.com/py-sdl/py-sdl2) | Gamepad input | SDL2: zlib · PySDL2: Public Domain (CC0) / zlib |
 | xcb-util libraries | X11 / XWayland support of Qt | MIT/X11 licenses, see the included copyright files |
 
-The MoonDeck CLI is a nightly build of [MoonDeck](https://github.com/FrogTheFrog/moondeck) (commit [`00f8c31`](https://github.com/FrogTheFrog/moondeck/tree/00f8c31a6d9324878811178a2f8a319e4ca5c7c2)); its source code is available there. MoonDeck Buddy itself is not bundled; it runs on your hosts.
+The MoonDeck CLI is a nightly build of [MoonDeck](https://github.com/MoonDeckTeam/moondeck) (commit [`de3f5e4`](https://github.com/MoonDeckTeam/moondeck/tree/de3f5e42f400e44318d47d0597c0c78ebb2bb934), nightly of 2026-11-12); its source code is available there. MoonDeck Buddy itself is not bundled; it runs on your hosts.
 
 ---
 

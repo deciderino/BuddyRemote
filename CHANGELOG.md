@@ -3,13 +3,30 @@
 All notable changes to BuddyRemote are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 release.
+Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`, `1.4`); there was no 1.1 release.
 
 ## [Unreleased]
 
-### Changed (1.4-preview5)
+## [1.4] - 2026-11-15
 
-- Version 1.4-preview5 (GitHub pre-release; the final 1.4 replaces it, 1.3.1 does not see it). The earlier 1.4 previews are removed from GitHub.
+### Highlights
+
+- **Windows version.** BuddyRemote now also runs on Windows 10/11 x64 (a ZIP with a folder you unpack, MoonDeck CLI included). Linux works as before.
+- **Find hosts automatically (optional).** "Add host" can search the local network for PCs running Sunshine or Apollo and check MoonDeck Buddy on them. Adding a host by hand works exactly as before.
+- **Editing with a controller.** Two levels (cards, then the tiles of a card), button hints in the edit bar only while you use the controller, PlayStation glyphs for PlayStation pads.
+- **Keyboard and Steam hardware.** "Move" and "Move card" in the tile menu make moving possible with the keyboard alone; a Steam Controller or Steam Deck in Steam's desktop layout is left to Steam (no double input).
+- **Fits small screens.** Short reasons on greyed tiles, a window that can be made much narrower, a short status bar.
+- **Smaller downloads** and a code cleanup without changes in behaviour.
+- **New MoonDeck CLI.** Ships with the MoonDeck nightly of 2026-11-12. Same Buddy API (9); pairing, wake and shut down work as before.
+- **Your setup is kept.** Just replace the AppImage; nothing changes for pairing, wake or shut down.
+
+### Changed (1.4)
+
+- **Bundled MoonDeck CLI updated** to the MoonDeck nightly of 2026-11-12 (commit `de3f5e4`, was `00f8c31` from 2026-10-20; SHA-256 Linux `347b4716…`, Windows `16999525…`). It speaks the same Buddy API (9), and the commands BuddyRemote uses (`host pair`, `host wake`, `host list --json`, `host scan --dry --json`, `host shutdown/restart/suspend/hibernate`, `steam launch`, `steam close`) have the same options and output. The MoonDeck changes since `00f8c31` are in the Decky plugin and its stream runner (setup command, clearer launch timeouts, flatpak helpers, dual-boot Buddy status), not in the CLI commands.
+- **MoonDeck moved to github.com/MoonDeckTeam.** The links in the app, README and manual, the MoonDeck CLI update check and the CLI download when running from source now use the new address (the old one still redirects).
+- README: Windows download and start.
+
+### Changed (1.4-preview5)
 
 - **Controller edit mode with two levels.** In edit mode the controller first moves between the host cards (level 1, the D-pad goes up/down from card to card). A opens the card's tiles (level 2): the D-pad moves a 3 px accent ring from tile to tile and the other cards are greyed. A selects the tile, a second A opens its menu (size, duplicate, hide/remove; D-pad chooses, A applies, B closes). X grabs the card (level 1) or the tile (level 2); the D-pad then moves it while the others make room, X releases it, B puts it back where it was. B goes back one level; B on the card level leaves edit mode. LB/RB still jump between rows (cards, edit bar, log). Undo/redo cover moves done with the controller. Mouse and touch work exactly as before.
 - **Controller button hints in the edit bar.** While a controller is used in edit mode, the edit bar shows where you are ("Cards:", "Gaming-PC › Tiles:", "Move “Wake”:" …) and what the buttons do right now, e.g. "A Edit tiles · X Grab card · B Done · LB/RB Switch row"; unavailable actions are greyed. The glyphs follow the controller type reported by SDL: PlayStation pads show ✕ ○ □ and L1/R1, all others (Xbox, Steam Deck, Switch, unknown) A B X and LB/RB. The hints disappear at once when the mouse moves (more than 4 px), is clicked or scrolled, the screen is touched or a real key is pressed (keys Steam Input sends together with a controller button do not count); normal mode shows no hints. Replaces the single "Controller: …" hint line. All 8 languages.
@@ -25,8 +42,6 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 - **Dragging a card to the last place.** While a card was dragged towards the end of the list, the gap that shows where it will land could open one place further down than the drop position, because its position was counted with the old gap still in the layout. The gap now opens exactly where the card will drop.
 
 ### Changed (1.4-preview4)
-
-- Version 1.4-preview4 (GitHub pre-release like the earlier previews; the final 1.4 replaces it, 1.3.1 does not see it).
 
 - **Shorter reasons on greyed tiles.** The tooltip of an unavailable tile now only names the reason, without the "Not available:" prefix: "PC is already on", "PC is off or not reachable", "Buddy not reachable", "Update Buddy on the host", "Update BuddyRemote", "Buddy version does not match" (all 8 languages). A PC that is off no longer shows "Buddy is not reachable" on its Shut down/Restart/… tiles. Which tiles are greyed is unchanged.
 - **The window can be made narrower.** The minimum width now follows what is really shown: a card needs room for name, IP, ⚙ and the tiles it actually uses (empty tile columns no longer count); "▶ Steam running …" and the grey extras end in "…" instead of widening the card. The fixed lower limit went from 420 to 320 px (one card with one tile and a collapsed control bar: 363 px instead of 557 px). Normal and wide windows look exactly as before; edit mode keeps the full width.
@@ -50,7 +65,7 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 - **Pairing: Cancel really cancels.** Cancel stops the MoonDeck CLI including the real CLI process behind its onefile launcher (Linux: SIGINT to the process group, so it aborts the pairing at Buddy; killed after 3 s if needed; Windows: the CLI and its child processes are terminated, Buddy ends the pending pairing with its own timeout). No "pairing failed" message, no late completion, no MAC lookup, the temporary CLI config is removed.
 - **Pairing: no frozen window.** The Buddy check before pairing runs in the background; the window stays responsive while an unreachable host (e.g. 192.0.2.10, "Gaming PC") times out.
 
-### Added
+### Added (1.4-preview)
 
 - **Windows preview (1.4-preview).** BuddyRemote runs on Windows 10/11 x64 as a ZIP with a folder you unpack (`BuddyRemote\BuddyRemote.exe`); the MoonDeck CLI (`moondeck-cli.exe`) is bundled. Settings live in `%APPDATA%\BuddyRemote`; "Start with the system" uses the per-user Run key; HTTPS checks use the Windows certificate store. The update check only offers releases that ship a Windows ZIP. Linux behaviour is unchanged.
 - Build: `packaging/windows/build.py` (Windows Python, PyInstaller onedir) and `build-windows.sh` (the same under Wine on Linux).
@@ -248,7 +263,8 @@ Versions are plain numbers (`1.0`, `1.2`, `1.3`, `1.3.1`); there was no 1.1 rele
 
 - First release: a Linux GUI for MoonDeck Buddy with wake, shut down, restart and suspend, pairing with automatic MAC detection, multiple hosts, a tray icon, an automatic MoonDeck CLI download with checksum verification, and optional logging.
 
-[Unreleased]: https://github.com/deciderino/BuddyRemote/compare/1.3.1...HEAD
+[Unreleased]: https://github.com/deciderino/BuddyRemote/compare/1.4...HEAD
+[1.4]: https://github.com/deciderino/BuddyRemote/compare/1.3.1...1.4
 [1.3.1]: https://github.com/deciderino/BuddyRemote/compare/1.3...1.3.1
 [1.3]: https://github.com/deciderino/BuddyRemote/compare/1.2...1.3
 [1.2]: https://github.com/deciderino/BuddyRemote/compare/1.0...1.2

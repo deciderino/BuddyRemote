@@ -66,7 +66,7 @@
   "tray_quit": "Salir",
   "tray_no_hosts": "(sin hosts)",
   "pair_now": "¿Emparejar ahora con este host?",
-  "attribution": "Esta aplicación usa MoonDeck CLI de FrogTheFrog.\n\nhttps://github.com/FrogTheFrog/moondeck\n\n¡Gracias por el gran trabajo!",
+  "attribution": "Esta aplicación usa MoonDeck CLI de FrogTheFrog.\n\nhttps://github.com/MoonDeckTeam/moondeck\n\n¡Gracias por el gran trabajo!",
   "running_in_background": "Ejecutándose en segundo plano",
   "cli_download_failed": "No se pudo descargar MoonDeck CLI.\nComprueba tu conexión a Internet e inténtalo de nuevo.",
   "app_version": "Versión:",

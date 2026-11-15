@@ -66,7 +66,7 @@
   "tray_quit": "終了",
   "tray_no_hosts": "（ホストなし）",
   "pair_now": "このホストと今すぐペアリングしますか？",
-  "attribution": "このアプリはFrogTheFrogによるMoonDeck CLIを使用しています。\n\nhttps://github.com/FrogTheFrog/moondeck\n\n素晴らしい仕事に感謝します！",
+  "attribution": "このアプリはFrogTheFrogによるMoonDeck CLIを使用しています。\n\nhttps://github.com/MoonDeckTeam/moondeck\n\n素晴らしい仕事に感謝します！",
   "running_in_background": "バックグラウンドで実行中",
   "cli_download_failed": "MoonDeck CLIをダウンロードできませんでした。\nインターネット接続を確認して、もう一度お試しください。",
   "app_version": "バージョン：",

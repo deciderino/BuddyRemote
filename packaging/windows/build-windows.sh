@@ -11,5 +11,5 @@ WINPY="${WINPY:-C:\\Python313\\python.exe}"
 echo "$MOONDECK_CLI_SHA256  $MOONDECK_CLI" | sha256sum -c -
 wine "$WINPY" "$(winepath -w packaging/windows/build.py)" \
   --cli "$(winepath -w "$MOONDECK_CLI")" --sha256 "$MOONDECK_CLI_SHA256" \
-  --cli-version "${MOONDECK_CLI_VERSION:-nightly}" --cli-commit "${MOONDECK_CLI_COMMIT:-00f8c31}" \
+  --cli-version "${MOONDECK_CLI_VERSION:-nightly}" --cli-commit "${MOONDECK_CLI_COMMIT:-de3f5e4}" \
   --buddy-api "${MOONDECK_CLI_BUDDY_API:-9}"

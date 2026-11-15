@@ -511,11 +511,11 @@ class OptionsDialog(QDialog):
         section("about_title")
         layout.addRow(t("app_version"), QLabel(APP_VERSION))
         link = "#1565c0" if light else "#4fc3f7"       # readable on both themes
-        thanks = QLabel(html.escape(t("about_thanks")) + ' <a href="https://github.com/FrogTheFrog/moondeck" '
+        thanks = QLabel(html.escape(t("about_thanks")) + ' <a href="https://github.com/MoonDeckTeam/moondeck" '
                         f'style="color: {link};">MoonDeck</a>')
         thanks.setTextFormat(Qt.TextFormat.RichText)
         thanks.setOpenExternalLinks(True)
-        thanks.setToolTip("https://github.com/FrogTheFrog/moondeck")
+        thanks.setToolTip("https://github.com/MoonDeckTeam/moondeck")
         thanks.setWordWrap(True)
         layout.addRow(thanks)
         # third-party licenses: own button, in-app viewer

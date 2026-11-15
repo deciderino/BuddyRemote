@@ -1,11 +1,11 @@
 Bundled third-party binary: moondeck-cli (file: moondeck-cli-win.exe, bundled as bundled\moondeck-cli.exe)
-Project:  MoonDeck by FrogTheFrog - https://github.com/FrogTheFrog/moondeck
+Project:  MoonDeck by FrogTheFrog (MoonDeckTeam) - https://github.com/MoonDeckTeam/moondeck
 License:  GNU General Public License v3.0 (see MoonDeck-CLI-GPL-3.0.txt)
-Release:  "nightly" (published 2026-10-20T11:16:32Z)
-Source:   tag "nightly" -> commit 00f8c31a6d9324878811178a2f8a319e4ca5c7c2
-          https://github.com/FrogTheFrog/moondeck/tree/00f8c31a6d9324878811178a2f8a319e4ca5c7c2
+Release:  "nightly" (published 2026-11-12T22:26:09Z)
+Source:   tag "nightly" -> commit de3f5e42f400e44318d47d0597c0c78ebb2bb934
+          https://github.com/MoonDeckTeam/moondeck/tree/de3f5e42f400e44318d47d0597c0c78ebb2bb934
           (CLI source: defaults/python/cli.py + defaults/python/lib, built with Nuitka onefile
            by .github/workflows/build.yaml; it in turn bundles Python and the packages in
            defaults/python/requirements.txt under their own licenses)
-SHA-256:  bbaf25ad491cb2926ad368a8a8bf789b10bbf9b9ded11bc4789f84755b30fb78
+SHA-256:  16999525ffdf3c01c186a6dc216025c15c7b1f4a5c621a69e13b0624b68dd185
 The binary is redistributed unmodified.

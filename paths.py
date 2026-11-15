@@ -4,9 +4,9 @@ import os
 import sys
 from pathlib import Path
 
-# "1.4-previewN": test builds before 1.4 (backend.is_newer_version: 1.4 > 1.4-preview2 > 1.3.1).
-# GitHub pre-release, never "latest": the update check of 1.3.1 does not see it.
-APP_VERSION = "1.4-preview5"
+# Plain numbers for releases ("1.3.1", "1.4"); "1.4-previewN" were GitHub pre-releases
+# (backend.is_newer_version: 1.4 > 1.4-preview5 > 1.3.1).
+APP_VERSION = "1.4"
 IS_WINDOWS = sys.platform == "win32"
 
 

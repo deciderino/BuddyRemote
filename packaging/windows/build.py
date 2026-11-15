@@ -4,7 +4,7 @@ Run with a *Windows* Python (natively, or under Wine via build-windows.sh) that 
 pyinstaller, PyQt6, PySDL2 and pysdl2-dll installed:
 
     python packaging\\windows\\build.py --cli C:\\path\\moondeck-cli-win.exe --sha256 <sha>
-           [--cli-version nightly] [--cli-commit 00f8c31] [--buddy-api 9]
+           [--cli-version nightly] [--cli-commit de3f5e4] [--buddy-api 9]
 
 Why onedir + zip (not onefile): starts fast, nothing is unpacked to %TEMP% on every start
 (onefile self-extractors are a classic antivirus false-positive pattern), the HKCU Run
@@ -72,7 +72,7 @@ def main():
     ap.add_argument("--cli", required=True, help="moondeck-cli-win.exe")
     ap.add_argument("--sha256", required=True, help="pinned checksum of --cli")
     ap.add_argument("--cli-version", default="nightly")
-    ap.add_argument("--cli-commit", default="00f8c31")
+    ap.add_argument("--cli-commit", default="de3f5e4")
     ap.add_argument("--buddy-api", type=int, default=9)
     a = ap.parse_args()
     if sys.platform != "win32":
